@@ -1,25 +1,21 @@
-#  Copyright 2025 Simon Klein
+# -----------------------------------------------------------------------------
+# Copyright (c) 2025 Simon Josef Klein
 #
-#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
-#  and associated documentation files (the “Software”), to deal in the Software without restriction,
-#  including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
-#  and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
-#  subject to the following conditions:
+# This work is licensed under the MIT License.
+# See the LICENSE file in this repository or visit:
+# https://opensource.org/licenses/MIT
 #
-#  The above copyright notice and this permission notice shall be included in all copies or
-#  substantial portions of the Software.
+# Author: Simon Klein
+# Date: 2025
+# Source: https://github.com/kleinsimon/labview-variant-data
 #
-#  THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-#  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-#  OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-#  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-#  OTHER DEALINGS IN THE SOFTWARE.
+# Description:
+# Support (de)serialization of native labview variants. Use vi.lib\Utility\VariantFlattenExp.vi with version 0.
+# -----------------------------------------------------------------------------
 
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Tuple, Iterable, List, Optional, Type, Any, Dict
+from typing import Tuple, Iterable, List, Optional, Type, Any, Dict, Collection, Union
 from numbers import Number
 from dataclasses import dataclass, replace
 
@@ -36,11 +32,27 @@ class LVDtypes:
     codepage = "cp1252"
 
 
-def num2bytes(number: Number, dtype=LVDtypes.u2) -> bytes:
+def num2bytes(number: Union[Number, Iterable], dtype=LVDtypes.u2) -> bytes:
+    """
+    convert a number to bytes using s specific type
+    :param number:
+    :param dtype:
+    :return:
+    """
     return np.array(number, dtype=dtype).tobytes()
 
 
 def bytes2num(buffer: bytes, offset=0, count: int=None, dtype=LVDtypes.u2, scalar=True) -> Tuple[int, int]:
+    """
+    parse a number from bytes
+    :param buffer:
+    :param offset: the offset of the start of the number or array
+    :param count: number of scalars to retrieve
+    :param dtype: type of all numbers
+    :param scalar: if true, return a scalar, otherwise an array
+    :return:
+    """
+
     val = np.frombuffer(buffer, offset=offset, count=count, dtype=dtype)
     offset += val.itemsize
 
@@ -51,6 +63,13 @@ def bytes2num(buffer: bytes, offset=0, count: int=None, dtype=LVDtypes.u2, scala
 
 
 def str2bytes(value: str, s_dtype=LVDtypes.u4, fill=False) -> bytes:
+    """
+    convert a string to a pascal string by prepending the size of the following string
+    :param value:
+    :param s_dtype: the type of the number, defaults to >u4
+    :param fill: if true, fill to full words
+    :return:
+    """
     value = value.encode(LVDtypes.codepage)
 
     buffer = num2bytes(len(value), dtype=s_dtype) + value
@@ -61,6 +80,15 @@ def str2bytes(value: str, s_dtype=LVDtypes.u4, fill=False) -> bytes:
 
 
 def bytes2str(buffer: bytes, offset, s_dtype=LVDtypes.u4, fill=False) -> Tuple[str, int]:
+    """
+    parse a pascal string from a buffer
+    :param buffer:
+    :param offset:
+    :param s_dtype:
+    :param fill: if true, skip uneven end byte
+    :return:
+    """
+
     size, offset = bytes2num(buffer, offset, dtype=s_dtype, count=1)
     string = buffer[offset:offset + size].decode(LVDtypes.codepage)
     offset += size
@@ -72,6 +100,12 @@ def bytes2str(buffer: bytes, offset, s_dtype=LVDtypes.u4, fill=False) -> Tuple[s
 
 
 def splitnumber(number, dtype=">u4"):
+    """
+    split a number into values with smaller bytesize (i64 -> 2x i32)
+    :param number:
+    :param dtype:
+    :return:
+    """
     number = np.asarray(number)
     buf = number.tobytes()
     return np.frombuffer(buf, count=number.size*2, dtype=dtype)
@@ -79,6 +113,10 @@ def splitnumber(number, dtype=">u4"):
 
 @dataclass
 class DeserializationData:
+    """
+    Holds information needed to deserialize a specific entry
+    """
+
     header: "HeaderInfo"
     buffer: bytes
     offset_d: int
@@ -86,19 +124,9 @@ class DeserializationData:
     count: int = 1
     version: int = 0
     scalar: bool = True
+    shape: Collection[int] = None
     header_lut: List["HeaderInfo"] = None
     fill_header_words: bool = True
-
-    def next(self, offset_d, count=1) -> "DeserializationData":
-        h_start = self.header.offset_h + self.header.size
-        if self.version == 0:
-            h = HeaderInfo.parse(self.buffer, h_start)
-
-        elif self.version == 0x18008000:
-            idx = bytes2num(self.buffer, offset=h_start, count=1, dtype=LVDtypes.u2)
-            h = self.header_lut[idx]
-
-        return self.replace(header=h, offset_d=offset_d, count=count)
 
     def replace(self, **kwargs) -> "DeserializationData":
         return replace(self, **kwargs)
@@ -120,19 +148,38 @@ class DeserializationData:
 
 @dataclass
 class SerializationData:
+    """
+    Holds information of a specific value in a structure
+    """
+
     version: int
     name: str = None
     depth: int = 0
 
     def replace(self, **kwargs) -> "SerializationData":
+        """
+        return a copy od this item with modified values
+        :param kwargs:
+        :return:
+        """
         return replace(self, **kwargs)
 
     def fork(self, **kwargs) -> "SerializationData":
-        return self.replace(depth = self.depth+1, **kwargs)
+        """
+        returns information for a subitem (depth+1) with optional changed params
+        :param kwargs:
+        :return:
+        """
+
+        return self.replace(depth=self.depth+1, **kwargs)
 
 
 @dataclass
 class SerializationResult:
+    """
+    Holds data of a serialized item in the structure
+    """
+
     code: int
     header: bytes
     buffer: bytes
@@ -140,6 +187,7 @@ class SerializationResult:
     sub_results: Iterable["SerializationResult"] = None
     header_indices: Iterable[int] = None
     name: str = None
+    shape: Collection[int] = None
 
     @property
     def header_q(self):
@@ -190,6 +238,10 @@ class SerializationResult:
 
 @dataclass
 class DeserializationResult:
+    """
+    Holds data of a deserialized item in the structure
+    """
+
     value: object
     offset_d: int
     offset_h: int
@@ -212,6 +264,14 @@ class DeserializationResult:
 
 @dataclass
 class HeaderInfo:
+    """
+    provides information of a type-header.
+
+    code the lv-datacode
+    offset_h offset AFTER thy typecode
+    size of the complete header
+    resolves to the name of the entry if given
+    """
     code: int
     offset_h: int
     size: int
@@ -250,8 +310,10 @@ class HeaderInfo:
         return replace(self, **kwargs)
 
 
-
 class LVTypeConverter(ABC):
+    """
+    Abstract Interface of all type-convertes
+    """
     supported_codes: Iterable[int] = []
     supported_types: Iterable[Type] = []
 
@@ -272,6 +334,12 @@ class LVTypeConverter(ABC):
 
     @classmethod
     def serialize(cls, value: Any, info: SerializationData) -> SerializationResult:
+        """
+        serialize the given value with the information given in info.
+        :param value:
+        :param info:
+        :return:
+        """
         res = cls._serialize(value, info.replace(name=None))
 
         if info.name is not None and info.name != "":
@@ -288,18 +356,34 @@ class LVTypeConverter(ABC):
 
     @classmethod
     def deserialize(cls, info: DeserializationData) -> DeserializationResult:
+        """
+        deserialize the portion of the input buffer described in 'info'
+        :param info:
+        :return:
+        """
         res = cls._deserialize(info)
         res.info = info
         return res
 
     @classmethod
-    def serialize_array(cls, value, info: SerializationData, object_mode=False)\
-            -> Tuple[SerializationResult, Iterable[int]]:
+    def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
+        """
+        specific method to serialize arrays.
+        :param value:
+        :param info:
+        :param object_mode:
+        :return:
+        """
         return cls.default_array_converter.serialize_array(value, info=info, object_mode=object_mode)
 
     @classmethod
-    def deserialize_array(cls, info: DeserializationData, shape: Iterable[int] = ()) -> DeserializationResult:
-        return cls.default_array_converter.deserialize_array(info, shape)
+    def deserialize_array(cls, info: DeserializationData) -> DeserializationResult:
+        """
+        specific method to deserialize arrays.
+        :param info:
+        :return:
+        """
+        return cls.default_array_converter.deserialize_array(info)
 
     def __init_subclass__(cls, **kwargs):
         for code in cls.supported_codes:
@@ -310,12 +394,37 @@ class LVTypeConverter(ABC):
 
     @classmethod
     def get_converter_for_value(cls, value) -> Type["LVTypeConverter"]:
+        """
+        get the type converter for a specific value
+        :param value:
+        :return:
+        """
         for t in cls.serializers.keys():
             if isinstance(value, t):
                 return cls.serializers[t]
-        return cls
+
+        raise ValueError(f"no converter found for type {str(type(value))}")
+
+    @classmethod
+    def get_converter_for_type(cls, dtype) -> Type["LVTypeConverter"]:
+        """
+        get the type converter for a specific value
+        :param value:
+        :return:
+        """
+        for t in cls.serializers.keys():
+            if issubclass(dtype, t):
+                return cls.serializers[t]
+
+        raise ValueError(f"no converter found for type {str(dtype)}")
 
     @classmethod
     def get_converter_for_code(cls, code: int) -> Type["LVTypeConverter"]:
+        """
+        get the type converter for a lv type code
+        :param value:
+        :return:
+        """
+
         return cls.deserializers[code]
 

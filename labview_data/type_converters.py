@@ -1,30 +1,28 @@
-#  Copyright 2025 Simon Klein
+# -----------------------------------------------------------------------------
+# Copyright (c) 2025 Simon Josef Klein
 #
-#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
-#  and associated documentation files (the “Software”), to deal in the Software without restriction,
-#  including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
-#  and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
-#  subject to the following conditions:
+# This work is licensed under the MIT License.
+# See the LICENSE file in this repository or visit:
+# https://opensource.org/licenses/MIT
 #
-#  The above copyright notice and this permission notice shall be included in all copies or
-#  substantial portions of the Software.
+# Author: Simon Klein
+# Date: 2025
+# Source: https://github.com/kleinsimon/labview-variant-data
 #
-#  THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-#  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-#  OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-#  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-#  OTHER DEALINGS IN THE SOFTWARE.
+# Description:
+# Support (de)serialization of native labview variants. Use vi.lib\Utility\VariantFlattenExp.vi with version 0.
+# -----------------------------------------------------------------------------
 
 import abc
-
-from typing import MutableSequence, Union
+from typing import MutableSequence, Union, Dict, Iterable, Optional, Any, Tuple, Type, List
+from numbers import Number
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
+import numpy as np
 
-from .utils import *
+from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
+from .utils import bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter
 
 
 class Cluster(tuple):
@@ -87,7 +85,7 @@ class Cluster(tuple):
         raise AttributeError(f"'{self.__class__.__name__}' hat kein Attribut '{name}'")
 
     def __dict__(self):
-        """Ermöglicht die Umwandlung in ein Dictionary mit dict(HybridTuple)."""
+        """Ermöglicht die Umwandlung in ein Dictionary mit dict()."""
         return {name: self[index] for name, index in self._names.items()}
 
     def __contains__(self, item):
@@ -140,22 +138,24 @@ class NumericConverter(LVTypeConverter):
         return DeserializationResult(
             value=value,
             offset_d=offset_d,
-            offset_h=offset_h
+            offset_h=offset_h,
+            info=info
             )
 
     @classmethod
-    def deserialize_array(cls, info: DeserializationData, shape: Iterable[int] = ()) -> DeserializationResult:
+    def deserialize_array(cls, info: DeserializationData) -> DeserializationResult:
         result = cls.deserialize(info.replace(scalar=False))
         value = np.asarray(result.value)
-        ndim = len(shape)
+        ndim = len(info.shape) if info.shape else 0
 
         if ndim == 0:
             value = value[0]
 
         else:
-            value = value.reshape(shape)
+            value = value.reshape(info.shape)
 
-        return result.replace(value=value)
+        result.value = value
+        return result
 
     @classmethod
     def _serialize(cls, value, info: SerializationData):
@@ -174,7 +174,8 @@ class NumericConverter(LVTypeConverter):
             code=code,
             header=header,
             buffer=buffer,
-            depth=info.depth
+            depth=info.depth,
+            shape=value.shape
         )
 
     @classmethod
@@ -182,14 +183,7 @@ class NumericConverter(LVTypeConverter):
         if object_mode:
             raise ValueError("Numpy converter supports no variant object type")
         result = cls.serialize(value, info)
-        value = np.asarray(value)
-
-        #r = SerializationResult(
-        #        code=0x40,
-        #        header=np.array(value.ndim, dtype=LVDtypes.u2).tobytes() + b"\xff\xff\xff\xff",
-        #        buffer=np.array(value.shape, dtype=LVDtypes.u4).tobytes(),
-        #        sub_results=(result, ))
-        return result, value.shape
+        return result
 
 
 class StringConverter(LVTypeConverter):
@@ -203,7 +197,8 @@ class StringConverter(LVTypeConverter):
         return DeserializationResult(
             value=value,
             offset_d=offset_d,
-            offset_h=info.header.start + info.header.size#info.header.offset_h + 4
+            offset_h=info.header.start + info.header.size,
+            info=info
         )
 
     @classmethod
@@ -241,7 +236,7 @@ class PathConverter(LVTypeConverter):
             header=b"\xff\xff\xff\xff",
             buffer=b"PTH0"
                    + num2bytes(len(buffer) + 4, LVDtypes.u4)
-                   + p_type + np.array(size, dtype=LVDtypes.u2).tobytes()
+                   + p_type + num2bytes(size, LVDtypes.u2)
                    + buffer
         )
 
@@ -275,7 +270,8 @@ class PathConverter(LVTypeConverter):
             value=Path(*parts),
             offset_d=end,
             offset_h=info.header.offset_h + 4,
-            depth=info.depth
+            depth=info.depth,
+            info=info
         )
 
 
@@ -294,40 +290,37 @@ class ArrayConverter(LVTypeConverter):
         else:
             subt_converter = cls
 
-        sub_result, shape = subt_converter.serialize_array(value, info.fork(), **kwargs)
-        ndim = len(shape)
+        sub_result = subt_converter.serialize_array(value, info.fork(), **kwargs)
+        ndim = len(sub_result.shape)
 
         return SerializationResult(
             code=0x40,
-            header=np.array(ndim, dtype=LVDtypes.u2).tobytes() + b"\xff\xff\xff\xff",
-            buffer=np.array(shape, dtype=LVDtypes.u4).tobytes(),
+            header=num2bytes(ndim, LVDtypes.u2) + b"\xff\xff\xff\xff",
+            buffer=num2bytes(sub_result.shape, LVDtypes.u4),
             sub_results=(sub_result, ),
             header_indices=(0, ),
             depth=info.depth
         )
 
     @classmethod
-    def _deserialize(cls, info: DeserializationData, shape: Iterable[int] = ()):
+    def _deserialize(cls, info: DeserializationData):
         offset_h = info.header.offset_h
         ndim, offset_h = bytes2num(info.buffer, offset=offset_h, count=1, dtype=LVDtypes.u2)
-        offset_h += ndim.itemsize + 2
+        offset_h += 4
 
         subh, offset_h = info.parse_header(offset_h)
 
         shape, offset_d = bytes2num(info.buffer, offset=info.offset_d, count=ndim, dtype=LVDtypes.u4, scalar=False)
-        count = shape.prod()
 
         subt_converter = LVTypeConverter.get_converter_for_code(subh.code)
 
-        res = subt_converter.deserialize_array(
-            info.fork(header=subh, offset_d=offset_d, count=count),
-            shape=shape)
+        res = subt_converter.deserialize_array(info.fork(header=subh, offset_d=offset_d, count=np.prod(shape), shape=shape))
+        res.offset_h = offset_h
 
-        return res.replace(offset_h=offset_h)
+        return res
 
     @classmethod
-    def serialize_array(cls, value, info: SerializationData, object_mode=False) -> (
-            Tuple)[SerializationResult, Iterable[int]]:
+    def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
         o_array = np.array(value, dtype=object)
         shape = o_array.shape
         o_array = o_array.flatten()
@@ -339,10 +332,10 @@ class ArrayConverter(LVTypeConverter):
 
         results = [converter.serialize(o, info) for o in o_array]
 
-        return results[0].replace(buffer=b"".join([res.flat_buffer() for res in results])), shape
+        return results[0].replace(buffer=b"".join([res.flat_buffer() for res in results]), shape=shape)
 
     @classmethod
-    def deserialize_array(cls, info: DeserializationData, shape: Iterable[int] = ()):
+    def deserialize_array(cls, info: DeserializationData):
         values = []
 
         offset_h = info.header.offset_h
@@ -354,16 +347,17 @@ class ArrayConverter(LVTypeConverter):
             offset_h = item.info.header.end
             values.append(item.value)
 
-        ndim = len(shape)
+        ndim = len(info.shape)
         if ndim > 1:
             values = np.array(values, dtype=object)
-            values = values.reshape(shape)
+            values = values.reshape(info.shape)
 
         return DeserializationResult(
             value=values,
             offset_d=offset_d,
             offset_h=offset_h,
-            depth=info.depth
+            depth=info.depth,
+            info=info
         )
 
 
@@ -389,7 +383,7 @@ class ClusterConverter(LVTypeConverter):
         return SerializationResult(
             code=0x50,
             buffer=b"",
-            header=np.asarray(n_items, dtype=LVDtypes.u2).tobytes(),
+            header=num2bytes(n_items, LVDtypes.u2),
             sub_results=items,
             depth=info.depth
         )
@@ -415,7 +409,8 @@ class ClusterConverter(LVTypeConverter):
             value=Cluster(items, names),
             offset_d=offset_d,
             offset_h=offset_h,
-            depth=info.depth
+            depth=info.depth,
+            info=info
         )
 
 
@@ -446,7 +441,7 @@ class TimeStampConverter(LVTypeConverter):
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
         offset_h = info.header.offset_h
         subtype, offset_h = bytes2num(info.buffer, offset=offset_h + 1, dtype=np.uint8, count=1)
-        #offset_h += 22
+
         if subtype != 0x06:
             raise ValueError("Only Timestamp supported as Signal (0x54)")
 
@@ -457,7 +452,8 @@ class TimeStampConverter(LVTypeConverter):
             offset_d=info.offset_d + 16,
             value=cls.epoch + dt,
             offset_h=offset_h,
-            depth=info.depth
+            depth=info.depth,
+            info=info
         )
 
 
@@ -482,7 +478,8 @@ class VoidConverter(LVTypeConverter):
             value=None,
             offset_h=info.header.offset_h,
             offset_d=info.offset_d,
-            depth=info.depth
+            depth=info.depth,
+            info=info
         )
 
 # region VariantVersion
@@ -542,10 +539,8 @@ class VariantVersionConverter0(VariantVersionConverter):
         offset_d += sub_header.size
 
         result = sub_header.converter.deserialize(info.replace(header=sub_header, offset_d=offset_d))
-        result = result.replace(offset_d=result.offset_d + 4, offset_h=info.header.offset_h)
-
-        #if v_size != 0 and result.offset_d != v_size + offset_d0:
-            #raise ValueError("Variant size mismatch")
+        result.offset_d = result.offset_d + 4
+        result.offset_h = info.header.offset_h
 
         return result
 
@@ -600,10 +595,11 @@ class VariantVersionConverter18008(VariantVersionConverter):
             sub_header, offset_d = info.parse_header(offset_d)
 
             result = sub_header.converter.deserialize(info.replace(header=sub_header, offset_d=offset_d))
-            return result.replace(
-                offset_d=result.offset_d + 4,
-                offset_h=info.header.start + info.header.size
-            )
+
+            result.offset_d = result.offset_d + 4
+            result.offset_h = info.header.start + info.header.size
+
+            return result
 
     @classmethod
     def _wrap_variant(cls, res: SerializationResult, info: SerializationData) -> SerializationResult:
@@ -732,6 +728,7 @@ class MapConverter(LVTypeConverter):
             value=results,
             offset_d=offset_d,
             offset_h=offset_h,
-            depth=info.depth
+            depth=info.depth,
+            info=info
         )
 
