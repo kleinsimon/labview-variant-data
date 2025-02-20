@@ -9,20 +9,31 @@ and "from string" functions.
 * Ready for different Versions, tested with 0, 18, 23. 
 * Extendable for custom types
 * Efficient handling of N-dim arrays in both directions
+* Maps, Arrays and Clusters of mixed types by encapsulating in variants
 
 # Supported Types
 
 | LabVIEW Type  | Python Type               |
 | ------------- | ------------------------- |
-| Integer       | Numpy scalars (Type safe) |
+| Integer/Bool  | Numpy scalars (Type safe) |
 | String        | Python str                |
 | Path          | pathlib.Path              |
-| Timestamp     | datetime.datetime         |
+| Timestamp     | datetime.datetime in utc  |
 | Void          | None                      |
 | Variant       | Nested structure          |
 | Array         | np.ndarray or list        |
 | Cluster       | Tuple                     |
 | Map           | Dict                      |
+
+# Unsupported
+* Objects of any type
+* References
+* Pictures (transfer as array)
+* Data Names (parsed but by now not attached to the deserialized results in python except cluster)
+* Signals (send as array)
+* Enums (maybe soon)
+* Sets (maybe soon)
+* FXP numbers (maybe later)
 
 # Installation
 Copy the package into your python project or clone it as a git submodule
