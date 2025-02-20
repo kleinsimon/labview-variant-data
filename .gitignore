@@ -1,8 +1,5 @@
 .*/
 __pycache__
-/PPL
-*.aliases
-*.lvlps
 build/
 dist/
 *.egg-info
