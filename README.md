@@ -7,7 +7,6 @@ and "from string" functions.
 * Create and parse arbitrary binary data representing structured data
 * Supports all basic data types and structures, even nested structures and variants
 * Ready for different Versions, tested with 0, 18, 23. 
-  See https://knowledge.ni.com/KnowledgeArticleDetails?id=kA00Z0000015CmaSAE&l=en-US for more information
 * Extendable for custom types
 * Efficient handling of N-dim arrays in both directions
 
@@ -30,8 +29,7 @@ Copy the package into your python project or clone it as a git submodule
 
 # Usage
 
-Simple...
-
+## Python
 ```
 from labview import serialize_variant, deserialize_variant
 
@@ -48,6 +46,21 @@ print(result)
 # ('Hello', 'World')
 
 ```
+
+## LabVIEW
+Deserialze with "From String" and Variant as type
+
+![image](https://github.com/user-attachments/assets/617208de-f434-4c5e-85c6-b51bde92a538)
+
+Serialize with "To String"
+
+![image](https://github.com/user-attachments/assets/3de37467-2593-4538-bc09-dbf456801c9d)
+
+Care has to be taken regarding the version of the serialization algorithm in labview. Although tests seem to indicate,
+that all versions up to now are supported for the listed types, edge cases could occur.
+The deserialization algorithm on both sides detects the version of the data.
+
+See https://knowledge.ni.com/KnowledgeArticleDetails?id=kA00Z0000015CmaSAE&l=en-US for more information
 
 # License
 Released under MIT license. See License.txt for details.
