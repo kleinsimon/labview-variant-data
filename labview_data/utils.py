@@ -10,7 +10,7 @@
 # Source: https://github.com/kleinsimon/labview-variant-data
 #
 # Description:
-# Support (de)serialization of native labview variants. Use vi.lib\Utility\VariantFlattenExp.vi with version 0.
+# Support (de)serialization of native labview variants. Use vi.lib\Utility\VariantFlattenExp.vi with version 18008000.
 # -----------------------------------------------------------------------------
 
 from abc import ABC, abstractmethod
