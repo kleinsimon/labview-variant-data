@@ -8,9 +8,6 @@
 # Author: Simon Klein
 # Date: 2025
 # Source: https://github.com/kleinsimon/labview-variant-data
-#
-# Description:
-# Support (de)serialization of native labview variants. Use vi.lib\Utility\VariantFlattenExp.vi with version 0.
 # -----------------------------------------------------------------------------
 
 import numpy as np
