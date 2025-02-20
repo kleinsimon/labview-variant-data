@@ -14,25 +14,15 @@ and "from string" functions.
 # Supported Types
 
 | LabVIEW Type  | Python Type               |
-
 | ------------- | ------------------------- |
-
 | Integer       | Numpy scalars (Type safe) |
-
 | String        | Python str                |
-
 | Path          | pathlib.Path              |
-
 | Timestamp     | datetime.datetime         |
-
 | Void          | None                      |
-
 | Variant       | Nested structure          |
-
 | Array         | np.ndarray or list        |
-
 | Cluster       | Tuple                     |
-
 | Map           | Dict                      |
 
 # Installation
