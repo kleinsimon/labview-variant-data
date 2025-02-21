@@ -132,6 +132,13 @@ class DeserializationData:
         return bytes2num(self.buffer, count=count, dtype=dtype, offset=offset)
 
     def fork(self, **kwargs) -> "DeserializationData":
+        # reset specific params to default
+        if "count" not in kwargs:
+            kwargs["count"] = DeserializationData.count
+        if "scalar" not in kwargs:
+            kwargs["scalar"] = DeserializationData.scalar
+        if "shape" not in kwargs:
+            kwargs["shape"] = DeserializationData.shape
         return self.replace(depth=self.depth+1, **kwargs)
 
     def parse_header(self, offset_h):

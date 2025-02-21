@@ -33,6 +33,7 @@ def items():
         Path(r"..\Windows"),
         np.arange(5, dtype=np.uint8),
         ["Test", "Hallo Welt"],
+        ("a", "bc", ("x", "y", "de")),
         (np.int32(1), np.int32(2), 3.5, "Mieze"),
         datetime.now(tz=timezone.utc),
         {"Hallo": np.int32(3), "Welt": np.int32(4)},
