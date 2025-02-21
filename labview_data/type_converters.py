@@ -577,7 +577,7 @@ class VariantVersionConverter18008(VariantVersionConverter):
 
         headers = []
 
-        info = info.replace(fill_header_words=False, header_lut=None)
+        info = info.replace(fill_header_words=False, header_lut=None, count=1)
 
         for i in range(n_headers):
             header, offset_h = info.parse_header(offset_h)

@@ -21,7 +21,6 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 
 from labview_data import serialize_variant, deserialize_variant
 
-
 @pytest.fixture
 def items():
     return [
