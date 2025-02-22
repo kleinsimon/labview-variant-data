@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 import numpy as np
 
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
+from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter
 from .types import Cluster
 
@@ -50,21 +51,21 @@ class NumericConverter(LVTypeConverter):
     @classmethod
     def _deserialize(cls, info: DeserializationData):
         dtype = np.dtype(cls.num_data[info.header.code])
-        size = dtype.itemsize
-        offset_d = info.offset_d
+        size = int(dtype.itemsize)
+        offset_d = int(info.offset_d)
         value = np.frombuffer(info.buffer, offset=offset_d, dtype=dtype, count=info.count)
-        offset_d += size * value.size
+        offset_d += size * int(value.size)
 
         if info.scalar and value.size == 1:
             value = value[0]
 
-        offset_h = info.header.offset_h
+        offset_h = int(info.header.offset_h)
 
         if value.dtype != np.bool_ and info.version >= 0x08508002:
             offset_h += 1
 
         return DeserializationResult(
-            value=value,
+            scalar=value,
             offset_d=offset_d,
             offset_h=offset_h,
             info=info
@@ -82,7 +83,7 @@ class NumericConverter(LVTypeConverter):
         else:
             value = value.reshape(info.shape)
 
-        result.value = value
+        result.scalar = value
         return result
 
     @classmethod
@@ -123,9 +124,9 @@ class StringConverter(LVTypeConverter):
         value, offset_d = bytes2str(info.buffer, info.offset_d, s_dtype=LVDtypes.u4)
 
         return DeserializationResult(
-            value=value,
+            scalar=value,
             offset_d=offset_d,
-            offset_h=info.header.start + info.header.size,
+            offset_h=info.header.offset_h + 4,
             info=info
         )
 
@@ -170,35 +171,34 @@ class PathConverter(LVTypeConverter):
 
     @classmethod
     def _deserialize(cls, info: DeserializationData):
-        offset_d = info.offset_d
+        offset_d = int(info.offset_d)
         if not info.buffer[offset_d:offset_d+4] == b"PTH0":
             raise ValueError
         offset_d += 4
         size, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u4)
         end = int(offset_d + size)
 
-        #offset_d += 2
         ptype, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u2)
         count, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u2)
 
         parts = []
         for i in range(count):
             s, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u1)
+            s = int(s)
             if s == 0:
                 parts.append("..\\")
             else:
                 parts.append(info.buffer[offset_d:offset_d+s].decode("ansi") + "\\")
-            offset_d += s
+            offset_d += int(s)
 
         if ptype == 0:
             #absolute path. This obviusly works only in windows
             parts[0] = parts[0][0] + ":\\"
 
         return DeserializationResult(
-            value=Path(*parts),
+            scalar=Path(*parts),
             offset_d=end,
             offset_h=info.header.offset_h + 4,
-            depth=info.depth,
             info=info
         )
 
@@ -232,7 +232,7 @@ class ArrayConverter(LVTypeConverter):
 
     @classmethod
     def _deserialize(cls, info: DeserializationData):
-        offset_h = info.header.offset_h
+        offset_h = int(info.header.offset_h)
         ndim, offset_h = bytes2num(info.buffer, offset=offset_h, count=1, dtype=LVDtypes.u2)
         offset_h += 4
 
@@ -264,7 +264,7 @@ class ArrayConverter(LVTypeConverter):
 
     @classmethod
     def deserialize_array(cls, info: DeserializationData):
-        values = []
+        items = []
 
         offset_h = info.header.offset_h
         offset_d = info.offset_d
@@ -273,19 +273,13 @@ class ArrayConverter(LVTypeConverter):
             item = info.header.converter.deserialize(info.replace(offset_d=offset_d))
             offset_d = item.offset_d
             offset_h = item.info.header.end
-            values.append(item.value)
+            items.append(item)
 
-        ndim = len(info.shape)
-        if ndim > 1:
-            values = np.array(values, dtype=object)
-            values = values.reshape(info.shape)
-
-        return DeserializationResult(
-            value=values,
+        return ArrayDeserializationResult(
             offset_d=offset_d,
             offset_h=offset_h,
-            depth=info.depth,
-            info=info
+            info=info,
+            items=items
         )
 
 
@@ -322,23 +316,22 @@ class ClusterConverter(LVTypeConverter):
         n_items, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2, count=1)
 
         items = []
-        names = []
+        #names = []
 
         offset_d = info.offset_d
 
         for i in range(n_items):
             item_header, offset_h = info.parse_header(offset_h)
             item = item_header.converter.deserialize(info.fork(header=item_header, offset_d=offset_d))
-            names.append(item.name)
-            items.append(item.value)
+            #names.append(item.name)
+            items.append(item)
             offset_d = item.offset_d
 
-        return DeserializationResult(
-            value=Cluster(items, names),
+        return ClusterDeserializationResult(
             offset_d=offset_d,
             offset_h=offset_h,
-            depth=info.depth,
-            info=info
+            info=info,
+            items=items
         )
 
 
@@ -378,9 +371,8 @@ class TimeStampConverter(LVTypeConverter):
 
         return DeserializationResult(
             offset_d=info.offset_d + 16,
-            value=cls.epoch + dt,
+            scalar=cls.epoch + dt,
             offset_h=offset_h,
-            depth=info.depth,
             info=info
         )
 
@@ -403,10 +395,8 @@ class VoidConverter(LVTypeConverter):
     @classmethod
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
         return DeserializationResult(
-            value=None,
             offset_h=info.header.offset_h,
             offset_d=info.offset_d,
-            depth=info.depth,
             info=info
         )
 
@@ -464,7 +454,7 @@ class VariantVersionConverter0(VariantVersionConverter):
         v_size, offset_d = bytes2num(info.buffer, offset=info.offset_d+2, count=1, dtype=LVDtypes.u2)
 
         sub_header = HeaderInfo.parse(info.buffer, offset_d)
-        offset_d += sub_header.size
+        offset_d += int(sub_header.size)
 
         result = sub_header.converter.deserialize(info.replace(header=sub_header, offset_d=offset_d))
         result.offset_d = result.offset_d + 4
@@ -641,7 +631,7 @@ class MapConverter(LVTypeConverter):
 
         n_items, offset_d = bytes2num(info.buffer, offset=info.offset_d, count=1, dtype=LVDtypes.u4)
 
-        results = {}
+        items = []
 
         for i in range(n_items):
             k_res = k_conv.deserialize(info.fork(header=k_header, offset_d=offset_d, count=1))
@@ -650,13 +640,12 @@ class MapConverter(LVTypeConverter):
             v_res = v_conv.deserialize(info.fork(header=v_header, offset_d=offset_d, count=1))
             offset_d = v_res.offset_d
 
-            results[k_res.value] = v_res.value
+            items.append((k_res, v_res))
 
-        return DeserializationResult(
-            value=results,
+        return MapDeserializationResult(
             offset_d=offset_d,
             offset_h=offset_h,
-            depth=info.depth,
-            info=info
+            info=info,
+            items=items
         )
 

@@ -15,6 +15,7 @@ import numpy as np
 from typing import Tuple, Iterable, List, Optional, Type, Any, Dict, Collection, Union
 from numbers import Number
 from dataclasses import dataclass, replace
+from .types import Cluster
 
 
 class LVDtypes:
@@ -51,7 +52,7 @@ def bytes2num(buffer: bytes, offset=0, count: int=None, dtype=LVDtypes.u2, scala
     """
 
     val = np.frombuffer(buffer, offset=offset, count=count, dtype=dtype)
-    offset += val.itemsize
+    offset = int(offset) + int(val.itemsize)
 
     if scalar and count == 1:
         return val[0], offset
@@ -87,6 +88,7 @@ def bytes2str(buffer: bytes, offset, s_dtype=LVDtypes.u4, fill=False) -> Tuple[s
     """
 
     size, offset = bytes2num(buffer, offset, dtype=s_dtype, count=1)
+    size = int(size)
     string = buffer[offset:offset + size].decode(LVDtypes.codepage)
     offset += size
 
@@ -144,10 +146,10 @@ class DeserializationData:
     def parse_header(self, offset_h):
         if self.header_lut:
             h_idx, offset_h = bytes2num(self.buffer, offset=offset_h, count=1, dtype=LVDtypes.u2)
-            return self.header_lut[h_idx], offset_h
+            return self.header_lut[h_idx], int(offset_h)
         else:
             h = self.header.parse(self.buffer, offset_h=offset_h, fill=self.fill_header_words)
-            return h, h.start + h.size
+            return h, int(h.start + h.size)
 
 
 @dataclass
@@ -240,30 +242,64 @@ class SerializationResult:
         return replace(self, **kwargs)
 
 
+NameStruct = Union[str, Tuple[str, "NameStruct"]]
+
+
 @dataclass
 class DeserializationResult:
     """
     Holds data of a deserialized item in the structure
     """
 
-    value: object
     offset_d: int
     offset_h: int
-    depth: int = 0
+    scalar: Any = None
     info: DeserializationData = None
+    items: Optional[Collection["DeserializationResult"]] = None
 
     def replace(self, **kwargs) -> "DeserializationResult":
         return replace(self, **kwargs)
 
     @property
+    def depth(self):
+        return self.info.depth
+
+    @property
     def has_name(self) -> bool:
-        return self.info and self.offset_h < self.info.header.end
+        return self.offset_h < self.info.header.end
 
     @property
     def name(self) -> Optional[str]:
         if self.has_name:
-            name, offset = bytes2str(self.info.buffer[:self.info.header.end], offset=self.offset_h, s_dtype=LVDtypes.u1)
+            name, offset = bytes2str(self.info.buffer, offset=self.offset_h, s_dtype=LVDtypes.u1)
             return name
+
+    @property
+    def value(self):
+        return self.scalar
+
+
+class ArrayDeserializationResult(DeserializationResult):
+    @property
+    def value(self) -> Iterable[Any]:
+        values = [item.value for item in self.items]
+        ndim = len(self.info.shape) if self.info.shape else 0
+        if ndim > 1:
+            values = np.array(values, dtype=object)
+            values = values.reshape(self.info.shape)
+        return values
+
+
+class ClusterDeserializationResult(DeserializationResult):
+    @property
+    def value(self) -> Cluster:
+        return Cluster([item.value for item in self.items], [item.name for item in self.items])
+
+
+class MapDeserializationResult(DeserializationResult):
+    @property
+    def value(self) -> Dict:
+        return {k_item.value: v_item.value for k_item, v_item in self.items}
 
 
 @dataclass

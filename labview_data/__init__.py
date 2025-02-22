@@ -14,13 +14,16 @@ from .type_converters import VariantConverter
 from .utils import HeaderInfo, DeserializationData, LVDtypes, SerializationData, LVTypeConverter
 
 
-def deserialize_variant(buffer: bytes):
+def deserialize_variant(buffer: bytes, return_struct=False):
     if len(buffer) == 0:
         return
 
     vheader = HeaderInfo(code=0x53, offset_h=0, size=0, start=0)
     res = VariantConverter.deserialize(DeserializationData(header=vheader, buffer=buffer, offset_d=0))
-    return res.value
+    if return_struct:
+        return res
+    else:
+        return res.value
 
 
 def serialize_variant(value, name=None, version=0x18008000) -> bytes:
