@@ -10,4 +10,4 @@
 # Source: https://github.com/kleinsimon/labview-variant-data
 # -----------------------------------------------------------------------------
 
-from .labview_data import serialize_variant, deserialize_variant
+from .labview_data import serialize_variant, deserialize_variant, NamedItem

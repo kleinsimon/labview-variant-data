@@ -16,8 +16,9 @@
 #  OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 #  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 #  OTHER DEALINGS IN THE SOFTWARE.
-
+import dataclasses
 from typing import Iterable, Union, Optional, Dict, Any
+from enum import IntEnum
 import numpy as np
 
 
@@ -103,3 +104,19 @@ class NamedArray(np.ndarray):
         if obj is None:
             return
         self.name = getattr(obj, 'name', "")
+
+
+@dataclasses.dataclass
+class NamedItem:
+    item: Any
+    name: Optional[str] = None
+
+
+class ExtendedIntEnum(IntEnum):
+    @classmethod
+    def _missing_(cls, value):
+        """Wird aufgerufen, wenn der Wert nicht im Enum definiert ist."""
+        obj = int.__new__(cls, value)  # Erstellt eine Instanz mit dem int-Wert
+        obj._value_ = value
+        obj._name_ = str(value)  # Setzt den Namen auf die String-Repräsentation
+        return obj

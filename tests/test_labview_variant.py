@@ -19,11 +19,12 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 
-from labview_data import serialize_variant, deserialize_variant
+from labview_data import serialize_variant, deserialize_variant, NamedItem
 
 @pytest.fixture
 def items():
     return [
+        {1,3,5,4},
         100,
         100.1,
         True,

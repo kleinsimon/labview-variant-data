@@ -12,10 +12,10 @@
 
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Tuple, Iterable, List, Optional, Type, Any, Dict, Collection, Union
+from typing import Tuple, Iterable, List, Optional, Type, Any, Dict, Collection, Union, Set
 from numbers import Number
 from dataclasses import dataclass, replace
-from .types import Cluster
+from .types import Cluster, NamedItem
 
 
 class LVDtypes:
@@ -40,7 +40,7 @@ def num2bytes(number: Union[Number, Iterable], dtype=LVDtypes.u2) -> bytes:
     return np.array(number, dtype=dtype).tobytes()
 
 
-def bytes2num(buffer: bytes, offset=0, count: int=None, dtype=LVDtypes.u2, scalar=True) -> Tuple[int, int]:
+def bytes2num(buffer: bytes, offset=0, count: int=1, dtype=LVDtypes.u2, scalar=True) -> Tuple[int, int]:
     """
     parse a number from bytes
     :param buffer:
@@ -197,7 +197,7 @@ class SerializationResult:
 
     @property
     def header_q(self):
-        return num2bytes(self.code, dtype=LVDtypes.u2) + self.header
+        return (b"\x00" if not self.name else b"\x40") + num2bytes(self.code, dtype=LVDtypes.u1) + self.header
 
     def all_sub_results(self, res=None) -> List["SerializationResult"]:
         if res is None:
@@ -278,6 +278,10 @@ class DeserializationResult:
     def value(self):
         return self.scalar
 
+    @property
+    def named_item(self) -> NamedItem:
+        return NamedItem(self.value, self.name)
+
 
 class ArrayDeserializationResult(DeserializationResult):
     @property
@@ -289,17 +293,47 @@ class ArrayDeserializationResult(DeserializationResult):
             values = values.reshape(self.info.shape)
         return values
 
+    @property
+    def named_item(self) -> NamedItem:
+        values = [item.named_item for item in self.items]
+        ndim = len(self.info.shape) if self.info.shape else 0
+        if ndim > 1:
+            values = np.array(values, dtype=object)
+            values = values.reshape(self.info.shape)
+        return NamedItem(values, self.name)
+
 
 class ClusterDeserializationResult(DeserializationResult):
     @property
     def value(self) -> Cluster:
         return Cluster([item.value for item in self.items], [item.name for item in self.items])
 
+    @property
+    def named_item(self) -> NamedItem:
+        value = Cluster([item.named_item for item in self.items], [item.name for item in self.items])
+        return NamedItem(value, self.name)
+
 
 class MapDeserializationResult(DeserializationResult):
     @property
     def value(self) -> Dict:
         return {k_item.value: v_item.value for k_item, v_item in self.items}
+
+    @property
+    def named_item(self) -> NamedItem:
+        value = {k_item.named_item: v_item.named_item for k_item, v_item in self.items}
+        return NamedItem(value, self.name)
+
+
+class SetDeserializationResult(DeserializationResult):
+    @property
+    def value(self) -> Set:
+        return {item.value for item in self.items}
+
+    @property
+    def named_item(self) -> NamedItem:
+        value = {item.named_item for item in self.items}
+        return NamedItem(value, self.name)
 
 
 @dataclass
@@ -356,8 +390,10 @@ class LVTypeConverter(ABC):
     """
     supported_codes: Iterable[int] = []
     supported_types: Iterable[Type] = []
+    order = 0
 
     serializers: Dict[Type, Type["LVTypeConverter"]] = {}
+    serializers_list: List[Tuple[Type, Type["LVTypeConverter"]]] = []
     deserializers: Dict[int, Type["LVTypeConverter"]] = {}
 
     default_array_converter: "LVTypeConverter" = None
@@ -373,19 +409,21 @@ class LVTypeConverter(ABC):
         )
 
     @classmethod
-    def serialize(cls, value: Any, info: SerializationData) -> SerializationResult:
+    def serialize(cls, value: Union[Any, NamedItem], info: SerializationData) -> SerializationResult:
         """
         serialize the given value with the information given in info.
         :param value:
         :param info:
         :return:
         """
-        res = cls._serialize(value, info.replace(name=None))
 
-        if info.name is not None and info.name != "":
-            res.replace(
-                name=info.name
-            )
+        if isinstance(value, NamedItem):
+            info.name = value.name
+            value = value.item
+
+        res = cls._serialize(value, info)
+
+        res.name = info.name
 
         return res
 
@@ -431,6 +469,9 @@ class LVTypeConverter(ABC):
 
         for t in cls.supported_types:
             LVTypeConverter.serializers[t] = cls
+            LVTypeConverter.serializers_list.append((t, cls))
+
+        LVTypeConverter.serializers_list.sort(key=lambda s: -s[1].order)
 
     @classmethod
     def get_converter_for_value(cls, value) -> Type["LVTypeConverter"]:
@@ -439,9 +480,19 @@ class LVTypeConverter(ABC):
         :param value:
         :return:
         """
-        for t in cls.serializers.keys():
+
+        if isinstance(value, NamedItem):
+            value = value.item
+
+        try:
+            return cls.serializers[type(value)]
+
+        except KeyError:
+            pass
+
+        for t, ser in cls.serializers_list:
             if isinstance(value, t):
-                return cls.serializers[t]
+                return ser
 
         raise ValueError(f"no converter found for type {str(type(value))}")
 
@@ -467,4 +518,3 @@ class LVTypeConverter(ABC):
         """
 
         return cls.deserializers[code]
-

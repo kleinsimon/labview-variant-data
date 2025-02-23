@@ -15,13 +15,14 @@ from typing import MutableSequence, Union, Dict, Iterable, Optional, Any, Tuple,
 from numbers import Number
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from enum import IntEnum
 
 import numpy as np
 
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
-from .utils import bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter
-from .types import Cluster
+from .utils import bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes
+from .types import ExtendedIntEnum
 
 
 class NumericConverter(LVTypeConverter):
@@ -426,7 +427,17 @@ class VariantVersionConverter:
 
     @classmethod
     def deserialize(cls, info: DeserializationData) -> DeserializationResult:
-        return cls.converters[info.version]._deserialize(info)
+        try:
+            v_converter = cls.converters[info.version]
+        except KeyError:
+            for v, converter in cls.converters.items():
+                if v > info.version:
+                    break
+                else:
+                    v_converter = converter
+            else:
+                v_converter = cls.converters[max(cls.converters.keys())]
+        return v_converter._deserialize(info)
 
     @classmethod
     @abc.abstractmethod
@@ -648,4 +659,144 @@ class MapConverter(LVTypeConverter):
             info=info,
             items=items
         )
+
+
+class SetConverter(LVTypeConverter):
+    supported_codes = (0x73, )
+    supported_types = (set, )
+
+    @classmethod
+    def _serialize(cls, value: set, info: SerializationData) -> SerializationResult:
+        value = list(value)
+        item_types = {type(i) for i in value}
+
+        if len(item_types) == 1:
+            subt_converter = LVTypeConverter.get_converter_for_value(value[0])
+        else:
+            subt_converter = cls
+
+        sub_result = subt_converter.serialize(value, info.fork())
+
+        if info.version == 0:
+            header = b"\00\01"
+        else:
+            header = b""
+
+        return SerializationResult(
+            code=0x73,
+            header=header,
+            buffer=num2bytes(len(value), LVDtypes.u4),
+            sub_results=(sub_result, ),
+            depth=info.depth
+        )
+
+    @classmethod
+    def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
+        offset_h = int(info.header.offset_h)
+        offset_d = int(info.offset_d)
+
+        if info.version == 0:
+            sub_size, offset_h = bytes2num(info.buffer, offset=offset_h, count=1, dtype=LVDtypes.u2)
+            if sub_size != 1:
+                raise ValueError
+
+        subt, offset_h = info.parse_header(offset_h)
+        converter = subt.converter
+
+        s_size, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u4)
+
+        items = []
+
+        for i in range(s_size):
+            res = converter.deserialize(info.fork(offset_d=offset_d, header=subt))
+            offset_d = res.offset_d
+            items.append(res)
+
+        return SetDeserializationResult(
+            offset_d=offset_d,
+            offset_h=offset_h,
+            items=items,
+            info=info
+        )
+
+
+class EnumConverter(LVTypeConverter):
+    supported_codes = (0x15, 0x16, 0x17)
+    supported_types = (IntEnum, )
+    order = 1
+
+    dtype_limits = [(dtype, np.iinfo(dtype).max) for dtype in (LVDtypes.u1, LVDtypes.u2, LVDtypes.u4)]
+
+    @classmethod
+    def _serialize(cls, value: IntEnum, info: SerializationData) -> SerializationResult:
+        items = {item.value: item.name for item in type(value)}
+
+        set_values = set(items.keys())
+        maxvalue = max(set_values)
+
+        for (dtype, dtmax), code in zip(cls.dtype_limits, cls.supported_codes):
+            if dtmax >= maxvalue:
+                break
+        else:
+            raise ValueError
+
+        header = num2bytes(maxvalue+1, dtype=LVDtypes.u2)
+
+        for i in range(maxvalue + 1):
+            if i in set_values:
+                header += str2bytes(items[i], s_dtype=LVDtypes.u1, fill=False)
+            else:
+                header += b"\00"
+
+        buffer = num2bytes(value.value, dtype=dtype)
+
+        #if info.version >= 0x8508002:
+        #    header += b"\00\00"
+        #else:
+        header += b"\00"
+
+        return SerializationResult(
+            code=code,
+            header=header,
+            buffer=buffer,
+            depth=info.depth
+        )
+
+    @classmethod
+    def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
+        offset_h = int(info.header.offset_h)
+        offset_d = int(info.offset_d)
+        nitems, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2)
+
+        items = {}
+
+        for i in range(nitems):
+            item_name, offset_h = bytes2str(info.buffer, offset_h, s_dtype=LVDtypes.u1, fill=False)
+            if not item_name:
+                item_name = str(i)
+            items[item_name] = i
+
+        if info.version >= 0x8508002:
+            offset_h += 2
+        else:
+            offset_h += 1
+
+        code_idx = cls.supported_codes.index(info.header.code)
+        dtype = cls.dtype_limits[code_idx][0]
+
+        enum_v, offset_d = bytes2num(info.buffer, offset_d, dtype=dtype)
+
+        #python intenum supports no unnamed values, other than labview... and labview must start at 0 other than python
+        enum_t = IntEnum("", items)
+        value = enum_t(enum_v)
+
+        #value = enum_v
+
+        return DeserializationResult(
+            offset_d=offset_d,
+            offset_h=offset_h,
+            scalar=value,
+            info=info
+        )
+
 

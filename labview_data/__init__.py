@@ -11,7 +11,7 @@
 # -----------------------------------------------------------------------------
 
 from .type_converters import VariantConverter
-from .utils import HeaderInfo, DeserializationData, LVDtypes, SerializationData, LVTypeConverter
+from .utils import HeaderInfo, DeserializationData, LVDtypes, SerializationData, LVTypeConverter, NamedItem
 
 
 def deserialize_variant(buffer: bytes, return_struct=False):
@@ -26,7 +26,7 @@ def deserialize_variant(buffer: bytes, return_struct=False):
         return res.value
 
 
-def serialize_variant(value, name=None, version=0x18008000) -> bytes:
-    result = VariantConverter.serialize(value, SerializationData(name=name, version=version))
+def serialize_variant(value, version=0x18008000) -> bytes:
+    result = VariantConverter.serialize(value, SerializationData(version=version))
     return result.buffer
 
