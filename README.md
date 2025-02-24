@@ -23,7 +23,9 @@ and "from string" functions.
 | Variant       | Nested structure          |
 | Array         | np.ndarray or list        |
 | Cluster       | Tuple                     |
-| Map           | Dict                      |
+| Map           | dict                      |
+| Set           | set                       |
+| Enum          | IntEnum                   |
 
 # Unsupported
 * Objects of any type
@@ -31,8 +33,8 @@ and "from string" functions.
 * Pictures (transfer as array)
 * Data Names (parsed but by now not attached to the deserialized results in python except cluster)
 * Signals (send as array)
-* Enums (maybe soon)
-* Sets (maybe soon)
+* ~~Enums (maybe soon)~~
+* ~~Sets (maybe soon)~~
 * FXP numbers (maybe later)
 
 # Installation
