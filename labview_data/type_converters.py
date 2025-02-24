@@ -750,10 +750,10 @@ class EnumConverter(LVTypeConverter):
 
         buffer = num2bytes(value.value, dtype=dtype)
 
-        #if info.version >= 0x8508002:
-        #    header += b"\00\00"
-        #else:
-        header += b"\00"
+        if info.version == 0:
+            header += b""
+        else:
+            header += b"\00"
 
         return SerializationResult(
             code=code,
