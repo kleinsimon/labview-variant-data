@@ -27,6 +27,8 @@ class LVDtypes:
     i2 = np.dtype(">i2")
     i4 = np.dtype(">i4")
     i8 = np.dtype(">i8")
+    f4 = np.dtype(">f4")
+    f8 = np.dtype(">f8")
     codepage = "cp1252"
 
 
@@ -52,7 +54,7 @@ def bytes2num(buffer: bytes, offset=0, count: int=1, dtype=LVDtypes.u2, scalar=T
     """
 
     val = np.frombuffer(buffer, offset=offset, count=count, dtype=dtype)
-    offset = int(offset) + int(val.itemsize)
+    offset = int(offset) + int(val.itemsize) * count
 
     if scalar and count == 1:
         return val[0], offset

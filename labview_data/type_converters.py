@@ -22,7 +22,7 @@ import numpy as np
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes
-from .types import ExtendedIntEnum
+from .types import ExtendedIntEnum, Signal, AnalogSignal
 
 
 class NumericConverter(LVTypeConverter):
@@ -336,19 +336,100 @@ class ClusterConverter(LVTypeConverter):
         )
 
 
+class SignalConverter(LVTypeConverter):
+    supported_codes = (0x54, )
+    supported_types = (Signal, datetime)
+
+    @classmethod
+    def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
+        subtype, offset_h = bytes2num(info.buffer, offset=info.header.offset_h + 1, dtype=np.uint8, count=1)
+
+        converter = None
+
+        if subtype == 0x06:
+            converter = TimeStampConverter
+        elif subtype == 0x03:
+            converter = AnalogSignalConverter
+
+        if converter is None:
+            raise ValueError("Signal subtype {%:02X} not supported", subtype)
+
+        return converter.deserialize(info)
+
+    @classmethod
+    def _serialize(cls, value: Any, info: SerializationData) -> SerializationResult:
+        converter = None
+
+        if isinstance(value, AnalogSignal):
+            converter = AnalogSignalConverter
+        elif isinstance(value, datetime):
+            converter = TimeStampConverter
+
+        if converter is None:
+            raise ValueError(f"Signal datatype {type(value)} not supported")
+
+        return converter.serialize(value, info)
+
+
+class AnalogSignalConverter(LVTypeConverter):
+    @classmethod
+    def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
+        offset_h = int(info.header.offset_h)
+        offset_d = int(info.offset_d)
+        subtype, offset_h = bytes2num(info.buffer, offset=offset_h + 1, dtype=LVDtypes.u1, count=1)
+        c1, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2, count=1)
+        c2, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2, count=1)
+
+        t0, offset_d = TimeStampConverter.deserialize_date_raw(info, offset_d)
+        dt, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.f8, count=1)
+        n, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.u4, count=1)
+
+        values, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.f8, count=n)
+        err, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.u1, count=1)
+        err_code, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.i4, count=1)
+        err_string, offset_d = bytes2str(info.buffer, offset=offset_d, s_dtype=LVDtypes.u4)
+
+        attribs_r = VariantConverter.deserialize(info.fork(offset_d=offset_d))
+
+        signal = AnalogSignal(t0=t0, dt=dt, attributes=attribs_r.value, Y=values)
+
+        return DeserializationResult(
+            offset_d=attribs_r.offset_d,
+            offset_h=offset_h,
+            scalar=signal,
+            info=info,
+        )
+
+    @classmethod
+    def _serialize(cls, value: AnalogSignal, info: SerializationData) -> SerializationResult:
+        header = b"\x00\x03"
+
+        attribs_r = VariantConverter.serialize(value.attributes, info.fork())
+
+        buffer = (TimeStampConverter.serialize_date_raw(value.t0)   # write t0 timestamp
+                  + num2bytes(value.dt, dtype=LVDtypes.f8)          # write time diff
+                  + num2bytes(value.size, dtype=LVDtypes.u4)        # write number of elements
+                  + num2bytes(value.Y, dtype=LVDtypes.f8)           # write signal data array
+                  + b"\00\00\00\00\00\00\00\00\00"                  # Fake empty error cluster
+                  + attribs_r.buffer                                # include attributes, if any
+                  )
+
+        return SerializationResult(
+            code=0x54,
+            header=header,
+            buffer=buffer,
+            depth=info.depth
+        )
+
+
 class TimeStampConverter(LVTypeConverter):
-    supported_types = (datetime, )
-    supported_codes = (0x54, ) # This is the code for Signal
     epoch = datetime(year=1904, month=1, day=1, tzinfo=timezone.utc)
     header_v0 = bytes.fromhex("0006 0016 0050 0004 0004 0003 0004 0003 0004 0003 0004 0003")
+    frac_to_microseconds = 1e6 / (2 ** 64)
 
     @classmethod
     def _serialize(cls, value: datetime, info: SerializationData) -> SerializationResult:
-        dif = value - cls.epoch
-
-        secs = np.int64(dif.total_seconds())
-        usecs = np.uint64(dif.microseconds)
-        data = num2bytes(secs, ">i8") + num2bytes(usecs, ">u8")
+        data = cls.serialize_date_raw(value)
 
         result = SerializationResult(
             code=0x54,
@@ -364,18 +445,31 @@ class TimeStampConverter(LVTypeConverter):
         offset_h = info.header.offset_h
         subtype, offset_h = bytes2num(info.buffer, offset=offset_h + 1, dtype=np.uint8, count=1)
 
-        if subtype != 0x06:
-            raise ValueError("Only Timestamp supported as Signal (0x54)")
-
-        s, ms = np.frombuffer(info.buffer, offset=info.offset_d, dtype=[("", ">i8"), ("", ">u8")], count=1)[0]
-        dt = timedelta(seconds=int(s), microseconds=int(ms))
+        date, offset_d = cls.deserialize_date_raw(info, info.offset_d)
 
         return DeserializationResult(
-            offset_d=info.offset_d + 16,
-            scalar=cls.epoch + dt,
+            offset_d=offset_d,
+            scalar=date,
             offset_h=offset_h,
             info=info
         )
+
+    @classmethod
+    def deserialize_date_raw(cls, info: DeserializationData, offset_d: int) -> Tuple[datetime, int]:
+        s, radix = np.frombuffer(info.buffer, offset=offset_d, dtype=[("", ">i8"), ("", ">u8")], count=1)[0]
+        dt = timedelta(seconds=int(s), microseconds=int(radix * cls.frac_to_microseconds))
+        date = cls.epoch + dt
+        offset_d += 16
+        return date, offset_d
+
+    @classmethod
+    def serialize_date_raw(cls, value: datetime) -> bytes:
+        dif = value - cls.epoch
+
+        secs = np.int64(dif.total_seconds())
+        usecs = np.uint64(dif.microseconds / cls.frac_to_microseconds)
+        data = num2bytes(secs, ">i8") + num2bytes(usecs, ">u8")
+        return data
 
 
 class VoidConverter(LVTypeConverter):
@@ -422,7 +516,8 @@ class VariantVersionConverter:
     def _serialize(cls, value: Dict, info: SerializationData) -> SerializationResult:
         converter = LVTypeConverter.get_converter_for_value(value)
         res = converter.serialize(value, info)
-
+        if value is None:
+            return res
         return cls.wrap_variant(res, info)
 
     @classmethod
