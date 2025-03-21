@@ -32,7 +32,7 @@ and "from string" functions.
 * References
 * Pictures (transfer as array)
 * Data Names (parsed but by now not attached to the deserialized results in python except cluster)
-* Signals (send as array)
+* ~~Signals (send as array)~~ Analog Waveforms now experimental
 * ~~Enums (maybe soon)~~
 * ~~Sets (maybe soon)~~
 * FXP numbers (maybe later)
