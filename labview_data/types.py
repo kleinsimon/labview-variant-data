@@ -153,7 +153,7 @@ class Signal:
 
 
 @dataclasses.dataclass
-class AnalogSignal(Signal):
+class OldAnalogSignal(Signal):
     Y: np.typing.NDArray[np.float64]
 
     @property
@@ -165,3 +165,50 @@ class AnalogSignal(Signal):
 
     def to_timeseries(self) -> typing.Tuple[np.typing.NDArray, np.typing.NDArray]:
         return self.times, self.Y
+
+    def __array__(self):
+        return self.Y
+
+
+class AnalogSignal(np.ndarray):
+    def __new__(cls, y, t0: datetime, dt: float, attributes: Any = None):
+        # Input array wird in ein ndarray konvertiert und zur Instanz dieser Klasse gemacht
+        obj = np.asarray(y).view(cls)
+        obj.t0 = t0
+        obj.dt = dt
+        obj.attributes = attributes
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self.t0 = getattr(obj, 't0', None)
+        self.dt = getattr(obj, 'dt', None)
+        self.attributes = getattr(obj, 'attributes', None)
+
+    def __repr__(self):
+        base_repr = repr(self.y)
+        return (f"AnalogSignal(t0={self.t0!r}, dt={self.dt!r}, attributes={self.attributes!r},\n"
+                f"            y={base_repr})")
+
+    @property
+    def y(self):
+        return self.view(np.ndarray)
+
+    @property
+    def delta(self) -> np.timedelta64:
+        return np.timedelta64(int(self.dt * 1e9), "ns")
+
+    @property
+    def start(self) -> np.datetime64:
+        return np.datetime64(self.t0)
+
+    @property
+    def end(self) -> np.datetime64:
+        return self.start + self.size * self.delta
+
+    @property
+    def times(self) -> np.typing.NDArray[np.datetime64]:
+        return self.start + self.delta * np.arange(self.size)
+
+    def to_timeseries(self) -> typing.Tuple[np.typing.NDArray, np.typing.NDArray]:
+        return self.times, self.y

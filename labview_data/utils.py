@@ -15,6 +15,7 @@ import numpy as np
 from typing import Tuple, Iterable, List, Optional, Type, Any, Dict, Collection, Union, Set
 from numbers import Number
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone, timedelta
 from .types import Cluster, NamedItem
 
 
@@ -100,6 +101,27 @@ def bytes2str(buffer: bytes, offset, s_dtype=LVDtypes.u4, fill=False) -> Tuple[s
     return string, offset
 
 
+epoch = datetime(year=1904, month=1, day=1, tzinfo=timezone.utc)
+frac_to_microseconds = 1e6 / (2 ** 64)
+
+
+def bytes2date(buffer: bytes, offset_d: int) -> Tuple[datetime, int]:
+    s, radix = np.frombuffer(buffer, offset=offset_d, dtype=[("", ">i8"), ("", ">u8")], count=1)[0]
+    dt = timedelta(seconds=int(s), microseconds=int(radix * frac_to_microseconds))
+    date = epoch + dt
+    offset_d += 16
+    return date, offset_d
+
+
+def date2bytes(value: datetime) -> bytes:
+    dif = value - epoch
+
+    secs = np.int64(dif.total_seconds())
+    usecs = np.uint64(dif.microseconds / frac_to_microseconds)
+    data = num2bytes(secs, ">i8") + num2bytes(usecs, ">u8")
+    return data
+
+
 def splitnumber(number, dtype=">u4"):
     """
     split a number into values with smaller bytesize (i64 -> 2x i32)
@@ -110,6 +132,60 @@ def splitnumber(number, dtype=">u4"):
     number = np.asarray(number)
     buf = number.tobytes()
     return np.frombuffer(buf, count=number.size*2, dtype=dtype)
+
+
+StructValue = Tuple[Type, Optional[int]]
+
+
+def struct_parse(struct: Iterable[StructValue], buffer: bytes, offset: int) -> Tuple[List, int]:
+    offset = int(offset)
+    res = []
+    for val_descr in struct:
+        if not isinstance(val_descr, tuple):
+            val_descr = (val_descr,)
+        val_t = val_descr[0]
+        val_n = 1
+        scalar = True
+        if len(val_descr) > 1:
+            val_n = val_descr[1]
+            scalar = False
+        value = None
+
+        if isinstance(val_t, tuple):
+            value = []
+            for i in range(val_n):
+                v, offset = struct_parse(val_t, buffer, offset)
+                value.append(v)
+            if scalar:
+                value = value[0]
+
+        elif np.issubdtype(val_t, np.number):
+            value, offset = bytes2num(buffer, offset, val_n, scalar=scalar, dtype=val_t)
+
+        elif issubclass(val_t, datetime):
+            value = []
+            for i in range(val_n):
+                v, offset = bytes2date(buffer, offset)
+                value.append(v)
+            if scalar:
+                value = value[0]
+
+        elif issubclass(val_t, str):
+            s_dtype = val_descr[2] if len(val_descr) > 2 else LVDtypes.u4
+            value = []
+            for i in range(val_n):
+                v, offset = bytes2str(buffer, offset, s_dtype)
+                value.append(v)
+            if scalar:
+                value = value[0]
+
+        elif issubclass(val_t, bool):
+            value, offset = bytes2num(buffer, offset, val_n, scalar=scalar, dtype=LVDtypes.u1)
+            value = value == 1
+
+        res.append(value)
+
+    return res, offset
 
 
 @dataclass
@@ -520,3 +596,5 @@ class LVTypeConverter(ABC):
         """
 
         return cls.deserializers[code]
+
+

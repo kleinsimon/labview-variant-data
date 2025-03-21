@@ -15,13 +15,14 @@ from typing import MutableSequence, Union, Dict, Iterable, Optional, Any, Tuple,
 from numbers import Number
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from enum import IntEnum
+from enum import IntEnum, auto
 
 import numpy as np
 
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
-from .utils import bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes
+from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
+                    date2bytes, bytes2date, struct_parse)
 from .types import ExtendedIntEnum, Signal, AnalogSignal
 
 
@@ -376,22 +377,17 @@ class AnalogSignalConverter(LVTypeConverter):
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
         offset_h = int(info.header.offset_h)
         offset_d = int(info.offset_d)
-        subtype, offset_h = bytes2num(info.buffer, offset=offset_h + 1, dtype=LVDtypes.u1, count=1)
-        c1, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2, count=1)
-        c2, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2, count=1)
+        (subtype, c1, c2), offset_h = struct_parse((LVDtypes.u1, LVDtypes.u2, LVDtypes.u2), info.buffer, offset_h)
 
-        t0, offset_d = TimeStampConverter.deserialize_date_raw(info, offset_d)
-        dt, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.f8, count=1)
-        n, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.u4, count=1)
-
-        values, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.f8, count=n)
-        err, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.u1, count=1)
-        err_code, offset_d = bytes2num(info.buffer, offset=offset_d, dtype=LVDtypes.i4, count=1)
-        err_string, offset_d = bytes2str(info.buffer, offset=offset_d, s_dtype=LVDtypes.u4)
+        (t0, dt, n), offset_d = struct_parse((datetime, LVDtypes.f8, LVDtypes.u4), info.buffer, offset_d)
+        (values, error), offset_d = struct_parse(
+            struct=((LVDtypes.f8, n), ((bool, LVDtypes.i4, str),),),
+            buffer=info.buffer,
+            offset=offset_d)
 
         attribs_r = VariantConverter.deserialize(info.fork(offset_d=offset_d))
 
-        signal = AnalogSignal(t0=t0, dt=dt, attributes=attribs_r.value, Y=values)
+        signal = AnalogSignal(t0=t0, dt=dt, attributes=attribs_r.value, y=values)
 
         return DeserializationResult(
             offset_d=attribs_r.offset_d,
@@ -423,9 +419,7 @@ class AnalogSignalConverter(LVTypeConverter):
 
 
 class TimeStampConverter(LVTypeConverter):
-    epoch = datetime(year=1904, month=1, day=1, tzinfo=timezone.utc)
     header_v0 = bytes.fromhex("0006 0016 0050 0004 0004 0003 0004 0003 0004 0003 0004 0003")
-    frac_to_microseconds = 1e6 / (2 ** 64)
 
     @classmethod
     def _serialize(cls, value: datetime, info: SerializationData) -> SerializationResult:
@@ -456,20 +450,11 @@ class TimeStampConverter(LVTypeConverter):
 
     @classmethod
     def deserialize_date_raw(cls, info: DeserializationData, offset_d: int) -> Tuple[datetime, int]:
-        s, radix = np.frombuffer(info.buffer, offset=offset_d, dtype=[("", ">i8"), ("", ">u8")], count=1)[0]
-        dt = timedelta(seconds=int(s), microseconds=int(radix * cls.frac_to_microseconds))
-        date = cls.epoch + dt
-        offset_d += 16
-        return date, offset_d
+        return bytes2date(info.buffer, offset_d)
 
     @classmethod
     def serialize_date_raw(cls, value: datetime) -> bytes:
-        dif = value - cls.epoch
-
-        secs = np.int64(dif.total_seconds())
-        usecs = np.uint64(dif.microseconds / cls.frac_to_microseconds)
-        data = num2bytes(secs, ">i8") + num2bytes(usecs, ">u8")
-        return data
+        return date2bytes(value)
 
 
 class VoidConverter(LVTypeConverter):
