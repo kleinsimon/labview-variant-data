@@ -402,7 +402,9 @@ class AnalogSignalConverter(LVTypeConverter):
         t0,     offset_d = lv_parse(datetime,           buffer, offset=offset_d)
         dt,     offset_d = lv_parse(LVDtypes.f8,        buffer, offset=offset_d)
         values, offset_d = lv_parse(np.ndarray,         buffer, offset=offset_d, s_dtype=LVDtypes.u4, e_dtype=dtype)
-        error,  offset_d = lv_parse(LVDtypes.err_type,  buffer, offset=offset_d)
+        err_f,  offset_d = lv_parse(bool,               buffer, offset=offset_d)
+        err_n,  offset_d = lv_parse(LVDtypes.i4,        buffer, offset=offset_d)
+        err_s,  offset_d = lv_parse(str,                buffer, offset=offset_d)
 
         attribs_r = VariantConverter.deserialize(info.fork(offset_d=offset_d))
 

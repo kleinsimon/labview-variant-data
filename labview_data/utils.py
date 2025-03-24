@@ -31,7 +31,6 @@ class LVDtypes:
     f4 = np.dtype(">f4")
     f8 = np.dtype(">f8")
     codepage = "cp1252"
-    err_type = (datetime, f8, u4)
 
 
 def num2bytes(number: Union[Number, Iterable], dtype=LVDtypes.u2) -> bytes:
