@@ -162,7 +162,7 @@ class Signal(np.ndarray):
         return self.start + self.size * self.delta
 
     @property
-    def times(self) -> np.typing.NDArray[np.datetime64]:
+    def times(self) -> np.typing.NDArray:
         return self.start + self.delta * np.arange(self.size)
 
     def to_timeseries(self) -> typing.Tuple[np.typing.NDArray, np.typing.NDArray]:
