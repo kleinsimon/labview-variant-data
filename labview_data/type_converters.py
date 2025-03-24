@@ -22,8 +22,8 @@ import numpy as np
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
-                    date2bytes, bytes2date, struct_parse)
-from .types import ExtendedIntEnum, Signal, AnalogSignal
+                    date2bytes, bytes2date, lv_parse, lv_dump, StructElement)
+from .types import ExtendedIntEnum, Signal, Signal
 
 
 class NumericConverter(LVTypeConverter):
@@ -349,7 +349,7 @@ class SignalConverter(LVTypeConverter):
 
         if subtype == 0x06:
             converter = TimeStampConverter
-        elif subtype == 0x03:
+        elif subtype in AnalogSignalConverter.dtypes.keys():
             converter = AnalogSignalConverter
 
         if converter is None:
@@ -361,7 +361,7 @@ class SignalConverter(LVTypeConverter):
     def _serialize(cls, value: Any, info: SerializationData) -> SerializationResult:
         converter = None
 
-        if isinstance(value, AnalogSignal):
+        if isinstance(value, Signal):
             converter = AnalogSignalConverter
         elif isinstance(value, datetime):
             converter = TimeStampConverter
@@ -373,21 +373,40 @@ class SignalConverter(LVTypeConverter):
 
 
 class AnalogSignalConverter(LVTypeConverter):
+    dtypes = {
+        0x14: LVDtypes.i1,
+        0x02: LVDtypes.i2,
+        0x15: LVDtypes.i4,
+        0x19: LVDtypes.i8,
+        0x11: LVDtypes.u1,
+        0x12: LVDtypes.u2,
+        0x13: LVDtypes.u4,
+        0x20: LVDtypes.u8,
+        0x05: LVDtypes.f4,
+        0x03: LVDtypes.f8,
+    }
+
     @classmethod
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
-        offset_h = int(info.header.offset_h)
+        offset_h = int(info.header.offset_h) + 1
         offset_d = int(info.offset_d)
-        (subtype, c1, c2), offset_h = struct_parse((LVDtypes.u1, LVDtypes.u2, LVDtypes.u2), info.buffer, offset_h)
 
-        (t0, dt, n), offset_d = struct_parse((datetime, LVDtypes.f8, LVDtypes.u4), info.buffer, offset_d)
-        (values, error), offset_d = struct_parse(
-            struct=((LVDtypes.f8, n), ((bool, LVDtypes.i4, str),),),
-            buffer=info.buffer,
-            offset=offset_d)
+        buffer = info.buffer
+
+        s_type, offset_h = lv_parse(LVDtypes.u1,        buffer, offset=offset_h)
+        c1,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)
+        c2,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)
+
+        dtype = cls.dtypes[s_type]
+
+        t0,     offset_d = lv_parse(datetime,           buffer, offset=offset_d)
+        dt,     offset_d = lv_parse(LVDtypes.f8,        buffer, offset=offset_d)
+        values, offset_d = lv_parse(np.ndarray,         buffer, offset=offset_d, s_dtype=LVDtypes.u4, e_dtype=dtype)
+        error,  offset_d = lv_parse(LVDtypes.err_type,  buffer, offset=offset_d)
 
         attribs_r = VariantConverter.deserialize(info.fork(offset_d=offset_d))
 
-        signal = AnalogSignal(t0=t0, dt=dt, attributes=attribs_r.value, y=values)
+        signal = Signal(t0=t0, dt=dt, attributes=attribs_r.value, y=values)
 
         return DeserializationResult(
             offset_d=attribs_r.offset_d,
@@ -397,18 +416,17 @@ class AnalogSignalConverter(LVTypeConverter):
         )
 
     @classmethod
-    def _serialize(cls, value: AnalogSignal, info: SerializationData) -> SerializationResult:
+    def _serialize(cls, value: Signal, info: SerializationData) -> SerializationResult:
         header = b"\x00\x03"
 
         attribs_r = VariantConverter.serialize(value.attributes, info.fork())
 
-        buffer = (TimeStampConverter.serialize_date_raw(value.t0)   # write t0 timestamp
-                  + num2bytes(value.dt, dtype=LVDtypes.f8)          # write time diff
-                  + num2bytes(value.size, dtype=LVDtypes.u4)        # write number of elements
-                  + num2bytes(value.Y, dtype=LVDtypes.f8)           # write signal data array
-                  + b"\00\00\00\00\00\00\00\00\00"                  # Fake empty error cluster
-                  + attribs_r.buffer                                # include attributes, if any
-                  )
+        buffer = lv_dump(value.t0)                             # write t0 timestamp
+        buffer += lv_dump(value.dt, dtype=LVDtypes.f8)          # write time diff
+        buffer += lv_dump(value.size, dtype=LVDtypes.u4)        # write number of elements
+        buffer += lv_dump(value.y, dtype=LVDtypes.f8)           # write signal data array
+        buffer += b"\00\00\00\00\00\00\00\00\00"                # Fake empty error cluster
+        buffer += attribs_r.buffer                              # include attributes, if any
 
         return SerializationResult(
             code=0x54,

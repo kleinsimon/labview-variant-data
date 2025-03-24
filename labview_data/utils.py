@@ -31,6 +31,7 @@ class LVDtypes:
     f4 = np.dtype(">f4")
     f8 = np.dtype(">f8")
     codepage = "cp1252"
+    err_type = (datetime, f8, u4)
 
 
 def num2bytes(number: Union[Number, Iterable], dtype=LVDtypes.u2) -> bytes:
@@ -134,58 +135,96 @@ def splitnumber(number, dtype=">u4"):
     return np.frombuffer(buf, count=number.size*2, dtype=dtype)
 
 
+@dataclass
+class StructType:
+    type: Union[Type, np.dtype] = None
+    s_dtype: np.dtype = LVDtypes.u4
+
+
+@dataclass
+class StructElement(StructType):
+    value: Union[Any, "StructElement"] = None
+
+    def __post_init__(self):
+        if self.type is None:
+            self.type = type(self.value)
+
+
 StructValue = Tuple[Type, Optional[int]]
 
 
-def struct_parse(struct: Iterable[StructValue], buffer: bytes, offset: int) -> Tuple[List, int]:
+def lv_dump(element: Union[Iterable[StructElement], StructElement], dtype=None, s_dtype=LVDtypes.u4) -> bytes:
+    buffer = None
+    if not isinstance(element, StructElement):
+        element = StructElement(value=element, type=dtype, s_dtype=s_dtype)
+
+    if isinstance(element, Iterable):
+        buffer = b""
+        for e in element:
+            buffer += lv_dump(e)
+
+    elif isinstance(element, StructElement):
+        value = element.value
+        e_t = element.type
+
+        if np.issubdtype(e_t, np.number):
+            buffer = num2bytes(value, dtype=e_t)
+
+        elif issubclass(e_t, str):
+            buffer = str2bytes(value, element.s_dtype)
+
+        elif issubclass(e_t, bool):
+            buffer = num2bytes(value, LVDtypes.u1)
+
+        elif issubclass(e_t, datetime):
+            buffer = date2bytes(value)
+
+    if not buffer:
+        raise ValueError
+
+    return buffer
+
+
+def lv_parse(dtype, buffer: bytes, offset: int, count=1, scalar=True, s_dtype=LVDtypes.u4, e_dtype=LVDtypes.f8) -> Tuple[List, int]:
     offset = int(offset)
-    res = []
-    for val_descr in struct:
-        if not isinstance(val_descr, tuple):
-            val_descr = (val_descr,)
-        val_t = val_descr[0]
-        val_n = 1
-        scalar = True
-        if len(val_descr) > 1:
-            val_n = val_descr[1]
-            scalar = False
-        value = None
 
-        if isinstance(val_t, tuple):
-            value = []
-            for i in range(val_n):
-                v, offset = struct_parse(val_t, buffer, offset)
-                value.append(v)
-            if scalar:
-                value = value[0]
+    value = None
 
-        elif np.issubdtype(val_t, np.number):
-            value, offset = bytes2num(buffer, offset, val_n, scalar=scalar, dtype=val_t)
+    if isinstance(dtype, tuple):
+        value = []
+        for i in range(count):
+            v, offset = lv_parse(dtype[i], buffer, offset)
+            value.append(v)
+        value = tuple(value)
 
-        elif issubclass(val_t, datetime):
-            value = []
-            for i in range(val_n):
-                v, offset = bytes2date(buffer, offset)
-                value.append(v)
-            if scalar:
-                value = value[0]
+    elif np.issubdtype(dtype, np.number):
+        value, offset = bytes2num(buffer, offset, count, scalar=scalar, dtype=dtype)
 
-        elif issubclass(val_t, str):
-            s_dtype = val_descr[2] if len(val_descr) > 2 else LVDtypes.u4
-            value = []
-            for i in range(val_n):
-                v, offset = bytes2str(buffer, offset, s_dtype)
-                value.append(v)
-            if scalar:
-                value = value[0]
+    elif issubclass(dtype, datetime):
+        value = []
+        for i in range(count):
+            v, offset = bytes2date(buffer, offset)
+            value.append(v)
+        if scalar:
+            value = value[0]
 
-        elif issubclass(val_t, bool):
-            value, offset = bytes2num(buffer, offset, val_n, scalar=scalar, dtype=LVDtypes.u1)
-            value = value == 1
+    elif issubclass(dtype, str):
+        value = []
+        for i in range(count):
+            v, offset = bytes2str(buffer, offset, s_dtype)
+            value.append(v)
+        if scalar:
+            value = value[0]
 
-        res.append(value)
+    elif issubclass(dtype, bool):
+        value, offset = bytes2num(buffer, offset, count, scalar=scalar, dtype=LVDtypes.u1)
+        value = value == 1
 
-    return res, offset
+    elif issubclass(dtype, np.ndarray):
+        n, offset = bytes2num(buffer, offset, 1, s_dtype, True)
+        value, offset = bytes2num(buffer, offset, n, e_dtype, False)
+
+    return value, offset
 
 
 @dataclass

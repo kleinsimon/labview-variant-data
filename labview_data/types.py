@@ -125,52 +125,7 @@ class ExtendedIntEnum(IntEnum):
         return obj
 
 
-@dataclasses.dataclass
-class Signal:
-    t0: datetime
-    dt: float
-    attributes: Any
-
-    @property
-    def size(self) -> int:
-        return 0
-
-    @property
-    def delta(self) -> np.timedelta64:
-        return np.timedelta64(int(self.dt * 1e9), "ns")
-
-    @property
-    def start(self) -> np.datetime64:
-        return np.datetime64(self.t0)
-
-    @property
-    def end(self) -> np.datetime64:
-        return self.start + self.size * self.delta
-
-    @property
-    def times(self) -> np.typing.NDArray[np.datetime64]:
-        return self.start + self.delta * np.arange(self.size)
-
-
-@dataclasses.dataclass
-class OldAnalogSignal(Signal):
-    Y: np.typing.NDArray[np.float64]
-
-    @property
-    def size(self) -> int:
-        return self.Y.shape[0]
-
-    def __getitem__(self, item: int) -> typing.Tuple[np.datetime64, float]:
-        return self.start + item * self.delta, self.Y[item]
-
-    def to_timeseries(self) -> typing.Tuple[np.typing.NDArray, np.typing.NDArray]:
-        return self.times, self.Y
-
-    def __array__(self):
-        return self.Y
-
-
-class AnalogSignal(np.ndarray):
+class Signal(np.ndarray):
     def __new__(cls, y, t0: datetime, dt: float, attributes: Any = None):
         # Input array wird in ein ndarray konvertiert und zur Instanz dieser Klasse gemacht
         obj = np.asarray(y).view(cls)
