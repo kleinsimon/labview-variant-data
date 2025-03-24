@@ -23,6 +23,7 @@ from typing import Iterable, Union, Optional, Dict, Any
 from collections import UserDict
 from enum import IntEnum
 import numpy as np
+from numpy.typing import NDArray
 
 
 class Cluster(tuple):
@@ -162,8 +163,8 @@ class Signal(np.ndarray):
         return self.start + self.size * self.delta
 
     @property
-    def times(self) -> np.typing.NDArray:
+    def times(self) -> NDArray:
         return self.start + self.delta * np.arange(self.size)
 
-    def to_timeseries(self) -> typing.Tuple[np.typing.NDArray, np.typing.NDArray]:
+    def to_timeseries(self) -> typing.Tuple[NDArray, NDArray]:
         return self.times, self.y
