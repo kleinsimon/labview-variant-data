@@ -382,10 +382,12 @@ class DeserializationResult:
 
     @property
     def has_name(self) -> bool:
-        return self.offset_h < self.info.header.end
+        return self.offset_h < self.info.header.end or self.info.header.name
 
     @property
     def name(self) -> Optional[str]:
+        if self.info.header.name:
+            return self.info.header.name
         if self.has_name:
             name, offset = bytes2str(self.info.buffer, offset=self.offset_h, s_dtype=LVDtypes.u1)
             return name
