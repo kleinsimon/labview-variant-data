@@ -18,8 +18,9 @@ def deserialize_variant(buffer: bytes, return_struct=False):
     if len(buffer) == 0:
         return
 
-    vheader = HeaderInfo(code=0x53, offset_h=0, size=0, start=0)
-    res = VariantConverter.deserialize(DeserializationData(header=vheader, buffer=buffer, offset_d=0))
+    #vheader = HeaderInfo(code=0x53, offset_h=0, size=0, start=0)
+    #res = VariantConverter.deserialize(DeserializationData(header=vheader, buffer=buffer, offset_d=0))
+    res = VariantConverter.parse(buffer, 0)
     if return_struct:
         return res
     else:

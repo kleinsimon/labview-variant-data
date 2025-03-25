@@ -393,22 +393,24 @@ class AnalogSignalConverter(LVTypeConverter):
 
         buffer = info.buffer
 
-        s_type, offset_h = lv_parse(LVDtypes.u1,        buffer, offset=offset_h)
-        c1,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)
-        c2,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)
+        s_type, offset_h = lv_parse(LVDtypes.u1,        buffer, offset=offset_h)  # get signal data type
+        c1,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)  # ??
+        c2,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)  # ??
 
         dtype = cls.dtypes[s_type]
 
-        t0,     offset_d = lv_parse(datetime,           buffer, offset=offset_d)
-        dt,     offset_d = lv_parse(LVDtypes.f8,        buffer, offset=offset_d)
-        values, offset_d = lv_parse(np.ndarray,         buffer, offset=offset_d, s_dtype=LVDtypes.u4, e_dtype=dtype)
-        err_f,  offset_d = lv_parse(bool,               buffer, offset=offset_d)
-        err_n,  offset_d = lv_parse(LVDtypes.i4,        buffer, offset=offset_d)
-        err_s,  offset_d = lv_parse(str,                buffer, offset=offset_d)
+        t0,     offset_d = lv_parse(datetime,           buffer, offset=offset_d)  # signal timestamp
+        dt,     offset_d = lv_parse(LVDtypes.f8,        buffer, offset=offset_d)  # signal delta t
+        values, offset_d = lv_parse(np.ndarray,         buffer, offset=offset_d, s_dtype=LVDtypes.u4, e_dtype=dtype)  # y
+        err_f,  offset_d = lv_parse(bool,               buffer, offset=offset_d)  # signal error cluster bool
+        err_n,  offset_d = lv_parse(LVDtypes.i4,        buffer, offset=offset_d)  # signal error cluster code
+        err_s,  offset_d = lv_parse(str,                buffer, offset=offset_d)  # signal error cluster message
 
-        attribs_r = VariantConverter.deserialize(info.fork(offset_d=offset_d))
+        attribs_r = VariantConverter.parse(info.buffer, offset_d)  # attributes variant
 
-        signal = Signal(t0=t0, dt=dt, attributes=attribs_r.value, y=values)
+        attributes = {item.name: item.value for item in attribs_r.items} if attribs_r.items else None
+
+        signal = Signal(t0=t0, dt=dt, attributes=attributes, y=values)
 
         return DeserializationResult(
             offset_d=attribs_r.offset_d,
@@ -620,15 +622,33 @@ class VariantVersionConverter18008(VariantVersionConverter):
 
         n_data, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u2)
 
-        for i in range(n_data): #there could be attributes
-            sub_header, offset_d = info.parse_header(offset_d)
+        assert n_data == 1
 
-            result = sub_header.converter.deserialize(info.replace(header=sub_header, offset_d=offset_d))
+        sub_header, offset_d = info.parse_header(offset_d)
 
-            result.offset_d = result.offset_d + 4
-            result.offset_h = info.header.start + info.header.size
+        result = sub_header.converter.deserialize(info.replace(header=sub_header, offset_d=offset_d))
+        offset_d = result.offset_d
 
-            return result
+        # region Attributes
+
+        n_attrs, offset_d = lv_parse(LVDtypes.u4, buffer=info.buffer, offset=offset_d, scalar=True)
+
+        attrs = []
+        for i_attr in range(n_attrs):
+            attr_name, offset_d = lv_parse(str, buffer=info.buffer, s_dtype=LVDtypes.u4, offset=offset_d)
+            attr = VariantConverter.parse(info.buffer, offset_d, name=attr_name)
+            attrs.append(attr)
+            offset_d = attr.offset_d
+
+        if attrs:
+            result.items = attrs
+
+        # endregion Attributes
+
+        result.offset_d = offset_d
+        result.offset_h = info.header.start + info.header.size
+
+        return result
 
     @classmethod
     def _wrap_variant(cls, res: SerializationResult, info: SerializationData) -> SerializationResult:
@@ -687,6 +707,11 @@ class VariantConverter(LVTypeConverter):
     @staticmethod
     def wrap_variant(res: SerializationResult, info: SerializationData) -> SerializationResult:
         return VariantVersionConverter.wrap_variant(res, info)
+
+    @classmethod
+    def parse(cls, buffer: bytes, offset: int, name=None) -> DeserializationResult:
+        vheader = HeaderInfo(code=0x53, offset_h=offset, size=0, start=offset, name=name)
+        return VariantConverter.deserialize(DeserializationData(header=vheader, buffer=buffer, offset_d=offset))
 
 
 class MapConverter(LVTypeConverter):
