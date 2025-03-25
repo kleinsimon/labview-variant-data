@@ -676,10 +676,10 @@ class VariantVersionConverter18008(VariantVersionConverter):
             code=0x53,
             header=b"",
             buffer=b"\x18\00\x80\00" + num2bytes(len(headers), LVDtypes.u4) + b"".join(headers)
-                   + b"\x00\x01"
+                   + b"\x00\x01"  # Number of values, always 1
                    + tl_result
                    + res.flat_buffer()
-                   + b"\00\00\00\00",
+                   + b"\00\00\00\00",  # Number of attributed... not supported
             depth=info.depth
         )
 
