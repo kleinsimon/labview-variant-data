@@ -394,8 +394,6 @@ class AnalogSignalConverter(LVTypeConverter):
         buffer = info.buffer
 
         s_type, offset_h = lv_parse(LVDtypes.u1,        buffer, offset=offset_h)  # get signal data type
-        c1,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)  # ??
-        c2,     offset_h = lv_parse(LVDtypes.u2,        buffer, offset=offset_h)  # ??
 
         dtype = cls.dtypes[s_type]
 
@@ -679,7 +677,7 @@ class VariantVersionConverter18008(VariantVersionConverter):
                    + b"\x00\x01"  # Number of values, always 1
                    + tl_result
                    + res.flat_buffer()
-                   + b"\00\00\00\00",  # Number of attributed... not supported
+                   + b"\00\00\00\00",  # Number of attributes... not supported
             depth=info.depth
         )
 

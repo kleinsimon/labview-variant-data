@@ -382,7 +382,7 @@ class DeserializationResult:
 
     @property
     def has_name(self) -> bool:
-        return self.offset_h < self.info.header.end or self.info.header.name
+        return (self.info.header.has_str and self.offset_h < self.info.header.end) or self.info.header.name
 
     @property
     def name(self) -> Optional[str]:
@@ -469,6 +469,7 @@ class HeaderInfo:
     size: int
     start: int
     name: str = None
+    has_str: bool = False
 
     @property
     def end(self) -> int:
@@ -482,7 +483,7 @@ class HeaderInfo:
     def parse(buffer: bytes, offset_h: int, fill=True) -> "HeaderInfo":
         start = offset_h
         size, offset_h = bytes2num(buffer, offset_h, count=1, dtype=LVDtypes.u2)
-
+        flags = buffer[offset_h]
         p_type = buffer[offset_h + 1]
         offset_h += 2
         if fill and size % 2 != 0:
@@ -495,7 +496,8 @@ class HeaderInfo:
             code=p_type,
             offset_h=offset_h,
             size=size,
-            start=start
+            start=start,
+            has_str=flags == 0x40
         )
 
     def replace(self, **kwargs) -> "HeaderInfo":
