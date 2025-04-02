@@ -382,7 +382,7 @@ class DeserializationResult:
 
     @property
     def has_name(self) -> bool:
-        return (self.info.header.has_str and self.offset_h < self.info.header.end) or self.info.header.name
+        return self.offset_h < self.info.header.end or self.info.header.name
 
     @property
     def name(self) -> Optional[str]:
@@ -497,7 +497,7 @@ class HeaderInfo:
             offset_h=offset_h,
             size=size,
             start=start,
-            has_str=flags == 0x40
+            has_str=flags
         )
 
     def replace(self, **kwargs) -> "HeaderInfo":
