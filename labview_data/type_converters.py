@@ -77,7 +77,7 @@ class NumericConverter(LVTypeConverter):
     def deserialize_array(cls, info: DeserializationData) -> DeserializationResult:
         result = cls.deserialize(info.replace(scalar=False))
         value = np.asarray(result.value)
-        ndim = len(info.shape) if info.shape else 0
+        ndim = len(info.shape) if info.shape is not None else 0
 
         if ndim == 0:
             value = value[0]
@@ -91,7 +91,7 @@ class NumericConverter(LVTypeConverter):
     @classmethod
     def _serialize(cls, value, info: SerializationData):
         value = np.asarray(value)
-        dtype = value.dtype
+        dtype = info.dtype or value.dtype
         code, dtype = cls.num_data_rev[dtype.name]
         value = value.astype(dtype)
 
@@ -214,7 +214,16 @@ class ArrayConverter(LVTypeConverter):
         item_types = [type(i) for i in value]
 
         kwargs = {}
-        if all([t == item_types[0] for t in item_types]):
+        if len(value) == 0:
+            if isinstance(value, np.ndarray):
+                dtype = value.dtype
+                info.dtype = dtype
+                subt_converter = NumericConverter
+                kwargs["object_mode"] = False
+            else:
+                subt_converter = cls
+                kwargs["object_mode"] = True
+        elif all([t == item_types[0] for t in item_types]):
             subt_converter = LVTypeConverter.get_converter_for_value(value[0])
             kwargs["object_mode"] = False
         else:
@@ -260,9 +269,13 @@ class ArrayConverter(LVTypeConverter):
         else:
             converter = VariantConverter
 
-        results = [converter.serialize(o, info) for o in o_array]
+        if len(o_array) > 0:
+            results = [converter.serialize(o, info) for o in o_array]
 
-        return results[0].replace(buffer=b"".join([res.flat_buffer() for res in results]), shape=shape)
+            return results[0].replace(buffer=b"".join([res.flat_buffer() for res in results]), shape=shape)
+
+        else:
+            return converter.serialize(None, info).replace(buffer=b"", shape=shape)
 
     @classmethod
     def deserialize_array(cls, info: DeserializationData):

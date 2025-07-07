@@ -277,6 +277,7 @@ class SerializationData:
     version: int
     name: str = None
     depth: int = 0
+    dtype: np.dtype = None
 
     def replace(self, **kwargs) -> "SerializationData":
         """
