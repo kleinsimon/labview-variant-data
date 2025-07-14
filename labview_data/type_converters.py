@@ -178,7 +178,7 @@ class PathConverter(LVTypeConverter):
             raise ValueError
         offset_d += 4
         size, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u4)
-        end = int(offset_d + size)
+        end = int(offset_d) + int(size)
 
         ptype, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u2)
         count, offset_d = bytes2num(info.buffer, offset=offset_d, count=1, dtype=LVDtypes.u2)
@@ -657,7 +657,7 @@ class VariantVersionConverter18008(VariantVersionConverter):
         # endregion Attributes
 
         result.offset_d = offset_d
-        result.offset_h = info.header.start + info.header.size
+        result.offset_h = int(info.header.start) + int(info.header.size)
 
         return result
 
@@ -876,7 +876,7 @@ class EnumConverter(LVTypeConverter):
         else:
             raise ValueError
 
-        header = num2bytes(maxvalue+1, dtype=LVDtypes.u2)
+        header = num2bytes(maxvalue + 1, dtype=LVDtypes.u2)
 
         for i in range(maxvalue + 1):
             if i in set_values:

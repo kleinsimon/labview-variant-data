@@ -265,7 +265,7 @@ class DeserializationData:
             return self.header_lut[h_idx], int(offset_h)
         else:
             h = self.header.parse(self.buffer, offset_h=offset_h, fill=self.fill_header_words)
-            return h, int(h.start + h.size)
+            return h, int(h.start) + int(h.size)
 
 
 @dataclass
@@ -474,7 +474,7 @@ class HeaderInfo:
 
     @property
     def end(self) -> int:
-        return self.start + self.size
+        return int(self.start) + int(self.size)
 
     @property
     def converter(self):
