@@ -11,22 +11,46 @@
 # -----------------------------------------------------------------------------
 
 import abc
-from typing import MutableSequence, Union, Dict, Iterable, Optional, Any, Tuple, Type, List
+from typing import MutableSequence, Dict, Iterable, Any, Tuple, Type, List
 from numbers import Number
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from enum import IntEnum, auto
+from datetime import datetime
+from enum import IntEnum
 
 import numpy as np
 
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
-                    date2bytes, bytes2date, lv_parse, lv_dump, StructElement)
-from .types import ExtendedIntEnum, Signal, Signal
+                    date2bytes, bytes2date, lv_parse, lv_dump)
+from .types import Signal
 
 
 class NumericConverter(LVTypeConverter):
+    """
+    NumericConverter class provides functionality for serializing and deserializing numeric
+    data types in LabVIEW formats. It supports a range of numeric formats, including various
+    integer, float, complex, and boolean types.
+
+    The class maps LabVIEW type codes to corresponding NumPy data types for seamless
+    conversion between them. It offers efficient serialization and deserialization of numeric
+    values and arrays, catering to use cases where numeric data needs to be transferred or stored.
+
+    :ivar num_data: A dictionary mapping LabVIEW type codes to NumPy format
+        strings for each numeric data type.
+    :type num_data: dict
+    :ivar num_types: A dictionary that maps LabVIEW type codes to NumPy dtype
+        objects.
+    :type num_types: dict
+    :ivar num_data_rev: A reverse mapping dictionary of NumPy dtype names to LabVIEW
+        type codes and NumPy dtype objects.
+    :type num_data_rev: dict
+    :ivar supported_codes: A list of LabVIEW type codes supported by the class.
+    :type supported_codes: list
+    :ivar supported_types: A tuple of supported Python types, including `Number`
+        and `bool`, for numeric data.
+    :type supported_types: tuple
+    """
     num_data = {        # lv_type --> dtype
         0x01: ">i1",    #i8
         0x02: ">i2",    #i16
@@ -90,6 +114,19 @@ class NumericConverter(LVTypeConverter):
 
     @classmethod
     def _serialize(cls, value, info: SerializationData):
+        """
+        Serializes numerical data into a structured serialization format. Converts the
+        provided value into the specified data type and generates a serialization result
+        with relevant information, including code, header, buffer, depth, and shape of
+        the data.
+
+        :param value: The input data to be serialized, usually in the form of an array or
+                      similar structure.
+        :param info: Instance of `SerializationData` containing metadata required for the
+                     serialization process, such as target data type, version, and depth.
+        :return: A `SerializationResult` object containing the serialization code,
+                 header, data buffer, depth, and shape.
+        """
         value = np.asarray(value)
         dtype = info.dtype or value.dtype
         code, dtype = cls.num_data_rev[dtype.name]
@@ -111,6 +148,24 @@ class NumericConverter(LVTypeConverter):
 
     @classmethod
     def serialize_array(cls, value, info: SerializationData, object_mode=False):
+        """
+        Serializes an array using the provided serialization data.
+
+        This method provides functionality to serialize a given value using
+        the provided `SerializationData`. If `object_mode` is enabled,
+        an exception will be raised as the numpy converter does not support
+        variant object types.
+
+        :param value: The data to be serialized.
+        :param info: Contains the metadata and auxiliary data required
+                     for serialization.
+        :type info: SerializationData
+        :param object_mode: A boolean flag indicating if object mode
+                            serialization is requested.
+        :return: The serialized representation of the input data.
+        :rtype: Any
+        :raises ValueError: If `object_mode` is set to True.
+        """
         if object_mode:
             raise ValueError("Numpy converter supports no variant object type")
         result = cls.serialize(value, info)
@@ -118,6 +173,21 @@ class NumericConverter(LVTypeConverter):
 
 
 class StringConverter(LVTypeConverter):
+    """
+    A class for converting string values for serialization and deserialization.
+
+    StringConverter provides methods to handle the transformation of string
+    data to and from the custom serialization format. It utilizes specific
+    serialization and deserialization methods suitable for handling strings
+    with designated supported codes and types.
+
+    :ivar supported_codes: Tuple of integers representing the supported codes
+        for the conversion process.
+    :type supported_codes: tuple[int]
+    :ivar supported_types: Tuple of types supported for the conversion process,
+        specifically strings in this case.
+    :type supported_types: tuple[type]
+    """
     supported_codes = (0x30, )
     supported_types = (str, )
 
