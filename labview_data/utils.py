@@ -63,6 +63,8 @@ class LVDtypes:
     f8 = np.dtype(">f8")
     codepage = "cp1252"
 
+def all_of_instance(value, cls):
+    return isinstance(value, cls) or (isinstance(value, Iterable) and all([isinstance(v, cls) for v in value]))
 
 def num2bytes(number: Union[Number, Iterable], dtype=LVDtypes.u2) -> bytes:
     """
@@ -170,7 +172,7 @@ epoch = datetime(year=1904, month=1, day=1, tzinfo=timezone.utc)
 frac_to_microseconds = 1e6 / (2 ** 64)
 
 
-def bytes2date(buffer: bytes, offset_d: int) -> Tuple[datetime, int]:
+def bytes2date(buffer: bytes, offset_d: int, count=1) -> Tuple[np.ndarray[datetime], int]:
     """
     Converts a byte buffer containing encoded date and time information into a datetime
     object and an updated offset value.
@@ -187,14 +189,20 @@ def bytes2date(buffer: bytes, offset_d: int) -> Tuple[datetime, int]:
     :return: A tuple containing the decoded datetime and the updated offset.
     :rtype: Tuple[datetime, int]
     """
-    s, radix = np.frombuffer(buffer, offset=offset_d, dtype=[("", ">i8"), ("", ">u8")], count=1)[0]
-    dt = timedelta(seconds=int(s), microseconds=int(radix * frac_to_microseconds))
-    date = epoch + dt
-    offset_d += 16
-    return date, offset_d
+
+    stamps = np.frombuffer(buffer, offset=offset_d, dtype=[("", ">i8"), ("", ">u8")], count=count)
+
+    dates = np.empty(count, dtype=datetime)
+
+    for i, (s, radix) in enumerate(stamps):
+        dt = timedelta(seconds=int(s), microseconds=int(radix * frac_to_microseconds))
+        dates[i] = epoch + dt
+        offset_d += 16
+
+    return dates, offset_d
 
 
-def date2bytes(value: datetime) -> bytes:
+def date2bytes(value: Union[datetime, Iterable[datetime]]) -> bytes:
     """
     Converts a given `datetime` object to a byte representation. The method calculates
     the total seconds and fractional microseconds since a predefined epoch time and
@@ -206,12 +214,85 @@ def date2bytes(value: datetime) -> bytes:
     :return: A byte array representing the encoded datetime object.
     :rtype: bytes
     """
-    dif = value - epoch
 
-    secs = np.int64(dif.total_seconds())
-    usecs = np.uint64(dif.microseconds / frac_to_microseconds)
-    data = num2bytes(secs, ">i8") + num2bytes(usecs, ">u8")
-    return data
+    if not isinstance(value, Iterable):
+        value = [value]
+
+    data = np.empty(len(value), dtype=[("", ">i8"), ("", ">u8")])
+
+    for i, v in enumerate(value):
+        dif = v - epoch
+        secs = np.int64(dif.total_seconds())
+        usecs = np.uint64(dif.microseconds / frac_to_microseconds)
+        data[i] = (secs, usecs)
+
+    return data.tobytes()
+
+
+# NumPy-Repräsentation der LabVIEW-Epoche (in Nanosekunden für höchste Präzision)
+EPOCH64 = np.datetime64('1904-01-01T00:00:00', 'ns')
+
+# Umrechnungsfaktoren für Nanosekunden (1 Sekunde = 1e9 ns)
+FRAC_TO_NS = 1e9 / (2 ** 64)
+NS_TO_FRAC = (2 ** 64) / 1e9
+
+
+def bytes2dateNP(buffer: bytes, offset_d: int, count: int = 1) -> Tuple[np.ndarray, int]:
+    """
+    Converts a byte buffer containing encoded LabVIEW date and time information into
+    an array of numpy datetime64 objects and an updated offset value.
+    """
+    # 1. Big-Endian Daten direkt in ein strukturiertes NumPy-Array einlesen
+    stamps = np.frombuffer(buffer, offset=offset_d, dtype=[("s", ">i8"), ("f", ">u8")], count=count)
+
+    # 2. Vektorisierte Umwandlung
+    # Sekunden in timedelta64[s] konvertieren
+    td_seconds = stamps['s'].astype('timedelta64[s]')
+
+    # Bruchteile in timedelta64[ns] konvertieren.
+    # float64 wird genutzt, um Integer-Overflows bei der Multiplikation zu vermeiden.
+    td_frac_ns = (stamps['f'].astype(np.float64) * FRAC_TO_NS).astype('int64').astype('timedelta64[ns]')
+
+    # 3. Epoche und Timedeltas addieren, um das finale datetime64-Array zu erhalten
+    dates = EPOCH64 + td_seconds + td_frac_ns
+
+    # 4. Offset aktualisieren (16 Bytes pro Timestamp)
+    offset_d += 16 * count
+
+    return dates, offset_d
+
+
+def date2bytesNP(values: Union[np.datetime64, np.ndarray, Iterable]) -> bytes:
+    """
+    Converts numpy datetime64 objects (or an iterable of datetimes) to a LabVIEW
+    byte representation using vectorized operations.
+    """
+    # 1. Sicherstellen, dass wir ein 1D numpy-Array vom Typ datetime64[ns] haben
+    dates = np.asarray(values, dtype='datetime64[ns]').flatten()
+    if dates.ndim == 0:
+        dates = dates[np.newaxis]
+
+    # 2. Zeitdifferenz zur LabVIEW-Epoche berechnen (Ergebnis ist timedelta64[ns])
+    dif = dates - EPOCH64
+
+    # 3. Volle Sekunden und restliche Nanosekunden extrahieren
+    one_sec = np.timedelta64(1, 's')
+
+    # floor_divide liefert die vollen Sekunden (funktioniert auch korrekt bei Werten vor 1904)
+    secs = np.floor_divide(dif, one_sec).astype('>i8')
+
+    # remainder liefert die restlichen Nanosekunden
+    remainder_ns = np.remainder(dif, one_sec).astype('int64')
+
+    # 4. Restliche Nanosekunden zurück in das LabVIEW-Bruchformat konvertieren
+    usecs = (remainder_ns.astype(np.float64) * NS_TO_FRAC).astype('>u8')
+
+    # 5. Strukturiertes Array zusammenbauen und als Bytes exportieren
+    data = np.empty(len(dates), dtype=[("s", ">i8"), ("f", ">u8")])
+    data['s'] = secs
+    data['f'] = usecs
+
+    return data.tobytes()
 
 
 def splitnumber(number, dtype=">u4"):
@@ -856,7 +937,7 @@ class ArrayDeserializationResult(DeserializationResult):
     @property
     def value(self) -> Iterable[Any]:
         values = [item.value for item in self.items]
-        ndim = len(self.info.shape) if self.info.shape else 0
+        ndim = len(self.info.shape) if self.info.shape is not None else 0
         if ndim > 1:
             values = np.array(values, dtype=object)
             values = values.reshape(self.info.shape)
@@ -1137,19 +1218,28 @@ class LVTypeConverter(ABC):
         return DeserializationResult(None, info.offset_d)
 
     @classmethod
-    def deserialize(cls, info: DeserializationData) -> DeserializationResult:
+    def deserialize(cls, info: DeserializationData, keep_child_info=True) -> DeserializationResult:
         """
-        Deserializes the provided deserialization data and returns the result. This method
-        utilizes the internal deserialization process and attaches the original
-        info to the result for reference.
+        Deserializes a given object using provided data and handles optional retention
+        of child information. This method leverages class-level deserialization logic
+        and allows flexibility in modifying the resultant data object based on input.
 
-        :param info: The deserialization data to be processed
+        :param info: The deserialization data used for reconstructing the object.
+            This is expected to provide all necessary details for the deserialization
+            process.
         :type info: DeserializationData
-        :return: The result of the deserialization process with associated info
+        :param keep_child_info: A flag indicating whether child-specific information
+            in the resulting object should be retained. Defaults to False, which means
+            child information will be replaced by the provided `info`.
+        :type keep_child_info: bool
+        :return: A deserialization result containing the reconstructed object.
         :rtype: DeserializationResult
         """
         res = cls._deserialize(info)
-        res.info = info
+        if keep_child_info:
+            res.info.header = info.header
+        else:
+            res.info = info
         return res
 
     @classmethod

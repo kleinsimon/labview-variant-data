@@ -11,7 +11,7 @@
 # -----------------------------------------------------------------------------
 
 import abc
-from typing import MutableSequence, Dict, Iterable, Any, Tuple, Type, List
+from typing import MutableSequence, Dict, Iterable, Any, Tuple, Type, List, Union
 from numbers import Number
 from pathlib import Path
 from datetime import datetime
@@ -22,7 +22,7 @@ import numpy as np
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
-                    date2bytes, bytes2date, lv_parse, lv_dump)
+                    date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance)
 from .types import Signal
 
 
@@ -281,30 +281,42 @@ class ArrayConverter(LVTypeConverter):
 
     @classmethod
     def _serialize(cls, value: Any, info: SerializationData) -> SerializationResult:
-        item_types = [type(i) for i in value]
+        object_mode = False
 
-        kwargs = {}
-        if len(value) == 0:
-            if isinstance(value, np.ndarray):
-                dtype = value.dtype
-                info.dtype = dtype
+        if isinstance(value, np.ndarray):
+            if np.issubdtype(value.dtype, np.number):
                 subt_converter = NumericConverter
-                kwargs["object_mode"] = False
+
+            elif np.issubdtype(value.dtype, np.datetime64):
+                subt_converter = TimeStampConverter
+
             else:
                 subt_converter = cls
-                kwargs["object_mode"] = True
-        elif all([t == item_types[0] for t in item_types]):
-            subt_converter = LVTypeConverter.get_converter_for_value(value[0])
-            kwargs["object_mode"] = False
         else:
-            subt_converter = cls
+            item_types = [type(i) for i in value]
 
-        sub_result = subt_converter.serialize_array(value, info.fork(), **kwargs)
+            if len(value) == 0:
+                if isinstance(value, np.ndarray):
+                    dtype = value.dtype
+                    info.dtype = dtype
+                    subt_converter = NumericConverter
+
+                else:
+                    subt_converter = cls
+                    object_mode = True
+
+            elif all([t == item_types[0] for t in item_types]):
+                subt_converter = LVTypeConverter.get_converter_for_value(value[0])
+
+            else:
+                subt_converter = cls
+
+        sub_result = subt_converter.serialize_array(value, info.fork(), object_mode=object_mode)
         ndim = len(sub_result.shape)
 
         return SerializationResult(
             code=0x40,
-            header=num2bytes(ndim, LVDtypes.u2) + b"\xff\xff\xff\xff",
+            header=num2bytes(ndim, LVDtypes.u2) + b"\xff\xff\xff\xff" * ndim,
             buffer=num2bytes(sub_result.shape, LVDtypes.u4),
             sub_results=(sub_result, ),
             header_indices=(0, ),
@@ -315,7 +327,7 @@ class ArrayConverter(LVTypeConverter):
     def _deserialize(cls, info: DeserializationData):
         offset_h = int(info.header.offset_h)
         ndim, offset_h = bytes2num(info.buffer, offset=offset_h, count=1, dtype=LVDtypes.u2)
-        offset_h += 4
+        offset_h += 4 * ndim
 
         subh, offset_h = info.parse_header(offset_h)
 
@@ -355,7 +367,7 @@ class ArrayConverter(LVTypeConverter):
         offset_d = info.offset_d
 
         for i in range(info.count):
-            item = info.header.converter.deserialize(info.replace(offset_d=offset_d))
+            item = info.header.converter.deserialize(info.replace(offset_d=offset_d, shape=None, count=1))
             offset_d = item.offset_d
             offset_h = item.info.header.end
             items.append(item)
@@ -422,37 +434,62 @@ class ClusterConverter(LVTypeConverter):
 
 class SignalConverter(LVTypeConverter):
     supported_codes = (0x54, )
-    supported_types = (Signal, datetime)
+    supported_types = (Signal, datetime, np.datetime64)
 
     @classmethod
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
-        subtype, offset_h = bytes2num(info.buffer, offset=info.header.offset_h + 1, dtype=np.uint8, count=1)
-
-        converter = None
-
-        if subtype == 0x06:
-            converter = TimeStampConverter
-        elif subtype in AnalogSignalConverter.dtypes.keys():
-            converter = AnalogSignalConverter
-
-        if converter is None:
-            raise ValueError("Signal subtype {%:02X} not supported", subtype)
+        converter = cls._select_deserialization_converter(info)
 
         return converter.deserialize(info)
 
     @classmethod
     def _serialize(cls, value: Any, info: SerializationData) -> SerializationResult:
+        converter = cls._select_serialization_converter(value)
+
+        return converter.serialize(value, info)
+
+    @classmethod
+    def _select_deserialization_converter(cls, info: DeserializationData) -> Type[LVTypeConverter]:
+        subtype, offset_h = bytes2num(info.buffer, offset=info.header.offset_h + 1, dtype=np.uint8, count=1)
+
+        if subtype ==  0x06:
+            converter = TimeStampConverter
+
+        elif subtype in AnalogSignalConverter.dtypes.keys():
+            converter = AnalogSignalConverter
+
+        else:
+            converter = None
+            raise ValueError("Signal subtype {%:02X} not supported", subtype)
+
+        return converter
+
+    @classmethod
+    def _select_serialization_converter(cls, value) -> Type[LVTypeConverter]:
         converter = None
 
-        if isinstance(value, Signal):
+        if all_of_instance(value, Signal):
             converter = AnalogSignalConverter
-        elif isinstance(value, datetime):
+        elif all_of_instance(value, datetime) or all_of_instance(value, np.datetime64) :
             converter = TimeStampConverter
 
         if converter is None:
             raise ValueError(f"Signal datatype {type(value)} not supported")
 
-        return converter.serialize(value, info)
+        return converter
+
+    @classmethod
+    def deserialize_array(cls, info: DeserializationData):
+        converter = cls._select_deserialization_converter(info)
+        return converter.deserialize_array(info)
+
+    @classmethod
+    def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
+        if object_mode:
+            super().serialize_array(value, info, object_mode=object_mode)
+
+        converter = cls._select_serialization_converter(value)
+        return converter.serialize_array(value, info, object_mode=object_mode)
 
 
 class AnalogSignalConverter(LVTypeConverter):
@@ -525,7 +562,7 @@ class TimeStampConverter(LVTypeConverter):
     header_v0 = bytes.fromhex("0006 0016 0050 0004 0004 0003 0004 0003 0004 0003 0004 0003")
 
     @classmethod
-    def _serialize(cls, value: datetime, info: SerializationData) -> SerializationResult:
+    def _serialize(cls, value: Union[datetime, np.datetime64, np.ndarray[np.datetime64]], info: SerializationData) -> SerializationResult:
         data = cls.serialize_date_raw(value)
 
         result = SerializationResult(
@@ -533,6 +570,7 @@ class TimeStampConverter(LVTypeConverter):
             header=cls.header_v0 if info.version == 0 else b"\x00\x06",
             buffer=data,
             depth=info.depth,
+            shape=value.shape if isinstance(value, np.ndarray) else (len(value), ) if isinstance(value, Iterable) else None,
         )
 
         return result
@@ -546,18 +584,35 @@ class TimeStampConverter(LVTypeConverter):
 
         return DeserializationResult(
             offset_d=offset_d,
-            scalar=date,
+            scalar=date[0],
             offset_h=offset_h,
             info=info
         )
 
     @classmethod
-    def deserialize_date_raw(cls, info: DeserializationData, offset_d: int) -> Tuple[datetime, int]:
-        return bytes2date(info.buffer, offset_d)
+    def deserialize_date_raw(cls, info: DeserializationData, offset_d: int, count=1) -> Tuple[np.ndarray[datetime], int]:
+        return bytes2dateNP(buffer=info.buffer, offset_d=offset_d, count=count)
 
     @classmethod
-    def serialize_date_raw(cls, value: datetime) -> bytes:
-        return date2bytes(value)
+    def serialize_date_raw(cls, value: Union[datetime, Iterable[datetime]]) -> bytes:
+        if all_of_instance(value, datetime):
+            return date2bytes(value)
+        return date2bytesNP(value)
+
+    @classmethod
+    def deserialize_array(cls, info: DeserializationData):
+        dates, offset_d = cls.deserialize_date_raw(info, info.offset_d, info.count)
+
+        return DeserializationResult(
+            offset_d=offset_d,
+            offset_h=info.header.offset_h,
+            info=info,
+            scalar=dates.reshape(info.shape),
+        )
+
+    @classmethod
+    def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
+        return cls._serialize(value, info)
 
 
 class VoidConverter(LVTypeConverter):
@@ -665,12 +720,8 @@ class VariantVersionConverter0(VariantVersionConverter):
 
     @classmethod
     def _wrap_variant(cls, res: SerializationResult, info: SerializationData) -> SerializationResult:
-        #buffer = num2bytes(len(res.header) + 2, dtype=LVDtypes.u2) + res.header + res.buffer + b"\x00\x00\x00\x00"
-
-        #buffer = num2bytes(len(buffer) + 4, LVDtypes.u4) + buffer
-
         buffer = res.flat_header() + res.flat_buffer() + b"\x00\x00\x00\x00"
-        buffer = b"\00\00" + num2bytes(len(buffer) + 4, LVDtypes.u2) + buffer
+        buffer = num2bytes(len(buffer) + 4, LVDtypes.i4) + buffer
 
         return SerializationResult(
             code=0x53,
@@ -1004,5 +1055,3 @@ class EnumConverter(LVTypeConverter):
             scalar=value,
             info=info
         )
-
-
