@@ -108,7 +108,7 @@ def bytes2num(buffer: bytes, offset=0, count: int=1, dtype=LVDtypes.u2, scalar=T
         return val, offset
 
 
-def str2bytes(value: str, s_dtype=LVDtypes.u4, fill=False) -> bytes:
+def str2bytes(value: str, codepage=LVDtypes.codepage, s_dtype=LVDtypes.u4, fill=False) -> bytes:
     """
     Convert a string to a bytes object with optional length prefix and padding.
 
@@ -124,7 +124,7 @@ def str2bytes(value: str, s_dtype=LVDtypes.u4, fill=False) -> bytes:
     :return: A bytes object containing the length prefix, the encoded string,
              and optional padding.
     """
-    value = value.encode(LVDtypes.codepage)
+    value = value.encode(codepage)
 
     buffer = num2bytes(len(value), dtype=s_dtype) + value
     if fill and len(buffer) % 2 != 0:
@@ -159,7 +159,7 @@ def bytes2str(buffer: bytes, offset, s_dtype=LVDtypes.u4, fill=False) -> Tuple[s
 
     size, offset = bytes2num(buffer, offset, dtype=s_dtype, count=1)
     size = int(size)
-    string = buffer[offset:offset + size].decode(LVDtypes.codepage)
+    string = str(buffer[offset:offset + size], LVDtypes.codepage)
     offset += size
 
     if fill and size + size.itemsize % 2 != 0:
@@ -504,7 +504,7 @@ class DeserializationData:
     """
 
     header: "HeaderInfo"
-    buffer: bytes
+    buffer: Union[bytes, memoryview]
     offset_d: int
     depth: int = 0
     count: int = 1
@@ -1338,6 +1338,7 @@ class LVTypeConverter(ABC):
         :rtype: Type[LVTypeConverter]
         :raises ValueError: If no converter is found for the specified data type.
         """
+
         for t in cls.serializers.keys():
             if issubclass(dtype, t):
                 return cls.serializers[t]

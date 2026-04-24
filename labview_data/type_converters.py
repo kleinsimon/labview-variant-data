@@ -16,8 +16,10 @@ from numbers import Number
 from pathlib import Path
 from datetime import datetime
 from enum import IntEnum
+from struct import unpack_from
 
 import numpy as np
+from numpy.dtypes import StringDType
 
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
@@ -204,13 +206,48 @@ class StringConverter(LVTypeConverter):
 
     @classmethod
     def _serialize(cls, value: str, info: SerializationData):
-        buffer = value.encode(LVDtypes.codepage)
+        buffer = str2bytes(value, LVDtypes.codepage, s_dtype=LVDtypes.u4)
 
         return SerializationResult(
             code=0x30,
             header=b"\xff\xff\xff\xff",
-            buffer=num2bytes(len(buffer), LVDtypes.u4) + buffer,
+            buffer=buffer,
             depth=info.depth
+        )
+
+    @classmethod
+    def deserialize_array(cls, info: DeserializationData):
+        offset_d = int(info.offset_d)
+        strings = []
+        buffer = memoryview(info.buffer)
+
+        for i in range(info.count):
+            length = int(unpack_from(">I", info.buffer, offset_d)[0])
+            offset_d += 4
+            strings.append(str(buffer[offset_d: offset_d + length], LVDtypes.codepage))
+            offset_d += length
+
+        if info.shape is not None and len(info.shape) > 1:
+            strings = np.array(strings, dtype=np.dtypes.StringDType)
+            strings = strings.reshape(info.shape)
+
+        return DeserializationResult(
+            scalar=strings,
+            offset_d=offset_d,
+            offset_h=info.header.offset_h + 4,
+            info=info
+        )
+
+    @classmethod
+    def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
+        val_array = np.asarray(value, dtype=StringDType)
+
+        return SerializationResult(
+            code=cls.supported_codes[0],
+            header=b"\xff\xff\xff\xff",
+            buffer=b"".join([str2bytes(s, s_dtype=LVDtypes.u4) for s in val_array.flat]),
+            depth=info.depth,
+            shape=val_array.shape
         )
 
 
@@ -260,7 +297,7 @@ class PathConverter(LVTypeConverter):
             if s == 0:
                 parts.append("..\\")
             else:
-                parts.append(info.buffer[offset_d:offset_d+s].decode("ansi") + "\\")
+                parts.append(str(info.buffer[offset_d:offset_d+s], "ansi") + "\\")
             offset_d += int(s)
 
         if ptype == 0:
@@ -290,8 +327,12 @@ class ArrayConverter(LVTypeConverter):
             elif np.issubdtype(value.dtype, np.datetime64):
                 subt_converter = TimeStampConverter
 
+            elif isinstance(value.dtype, np.dtypes.StringDType):
+                subt_converter = StringConverter
+
             else:
                 subt_converter = cls
+
         else:
             item_types = [type(i) for i in value]
 
@@ -309,7 +350,7 @@ class ArrayConverter(LVTypeConverter):
                     object_mode = True
 
             elif all([t == item_types[0] for t in item_types]):
-                subt_converter = LVTypeConverter.get_converter_for_value(value[0])
+                subt_converter = LVTypeConverter.get_converter_for_type(item_types[0])
 
             else:
                 subt_converter = cls
@@ -844,7 +885,10 @@ class VariantConverter(LVTypeConverter):
         return VariantVersionConverter.wrap_variant(res, info)
 
     @classmethod
-    def parse(cls, buffer: bytes, offset: int, name=None) -> DeserializationResult:
+    def parse(cls, buffer: Union[bytes, memoryview], offset: int, name=None) -> DeserializationResult:
+        if not isinstance(buffer, memoryview):
+            buffer = memoryview(buffer)
+
         vheader = HeaderInfo(code=0x53, offset_h=offset, size=0, start=offset, name=name)
         return VariantConverter.deserialize(DeserializationData(header=vheader, buffer=buffer, offset_d=offset))
 
