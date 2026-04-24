@@ -24,7 +24,7 @@ from .utils import HeaderInfo, DeserializationData, SerializationData, Deseriali
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
                     date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance)
-from .types import Signal, TypedList, FLEX_STRING_DTYPE, StringArray
+from .types import Signal, TypedList, FLEX_STRING_DTYPE, StringArray, Cluster
 
 
 class NumericConverter(LVTypeConverter):
@@ -435,11 +435,14 @@ class ClusterConverter(LVTypeConverter):
         n_items = len(value)
 
         items = []
+        names = None
 
-        names: Iterable[str]
+        if isinstance(value, Cluster):
+            names = value.name_list
 
         for i, v in enumerate(value):
-            item = LVTypeConverter.get_converter_for_value(v).serialize(v, info.fork())
+            name = names[i] if names else None
+            item = LVTypeConverter.get_converter_for_value(v).serialize(v, info.fork(name=name))
             items.append(item)
 
         return SerializationResult(
@@ -456,14 +459,12 @@ class ClusterConverter(LVTypeConverter):
         n_items, offset_h = bytes2num(info.buffer, offset=offset_h, dtype=LVDtypes.u2, count=1)
 
         items = []
-        #names = []
 
         offset_d = info.offset_d
 
         for i in range(n_items):
             item_header, offset_h = info.parse_header(offset_h)
             item = item_header.converter.deserialize(info.fork(header=item_header, offset_d=offset_d))
-            #names.append(item.name)
             items.append(item)
             offset_d = item.offset_d
 

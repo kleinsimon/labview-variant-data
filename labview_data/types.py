@@ -83,16 +83,21 @@ class Cluster(tuple):
         o = super().__new__(cls, values)
 
         o._names = dict()  # Benannte Werte
+        o._names_list = [None for _ in range(len(values))]
 
         if isinstance(names, dict):
             for i, name in names.items():
                 if name:
                     o._names[name] = i
 
+                o._names_list[i] = name
+
         elif isinstance(names, Iterable):
             for i, name in enumerate(names):
                 if name:
                     o._names[name] = i
+
+                o._names_list[i] = name
 
         return o
 
@@ -109,6 +114,10 @@ class Cluster(tuple):
         :rtype: Any
         """
         return self._names
+
+    @property
+    def name_list(self):
+        return self._names_list
 
     def __getitem__(self, key: Any):
         """
