@@ -23,7 +23,7 @@ from .utils import HeaderInfo, DeserializationData, SerializationData, Deseriali
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
                     date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance)
-from .types import Signal
+from .types import Signal, TypedList
 
 
 class NumericConverter(LVTypeConverter):
@@ -300,6 +300,9 @@ class ArrayConverter(LVTypeConverter):
                     dtype = value.dtype
                     info.dtype = dtype
                     subt_converter = NumericConverter
+
+                elif isinstance(value, TypedList):
+                    subt_converter = LVTypeConverter.get_converter_for_type(value.item_type)
 
                 else:
                     subt_converter = cls

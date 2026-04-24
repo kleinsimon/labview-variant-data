@@ -20,10 +20,14 @@ import dataclasses
 import typing
 from datetime import datetime
 from typing import Iterable, Union, Optional, Dict, Any
-from collections import UserDict
 from enum import IntEnum
 import numpy as np
 from numpy.typing import NDArray
+
+
+class TypedItem:
+    def __init__(self, item_type: Any = None):
+        self.item_type: Any = item_type
 
 
 class Cluster(tuple):
@@ -171,6 +175,10 @@ class NamedArray(np.ndarray):
         if obj is None:
             return
         self.name = getattr(obj, 'name', "")
+
+
+class TypedList(list, TypedItem):
+    pass
 
 
 @dataclasses.dataclass
