@@ -19,13 +19,12 @@ from enum import IntEnum
 from struct import unpack_from
 
 import numpy as np
-from numpy.dtypes import StringDType
 
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
                     date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance)
-from .types import Signal, TypedList
+from .types import Signal, TypedList, FLEX_STRING_DTYPE, StringArray
 
 
 class NumericConverter(LVTypeConverter):
@@ -228,7 +227,7 @@ class StringConverter(LVTypeConverter):
             offset_d += length
 
         if info.shape is not None and len(info.shape) > 1:
-            strings = np.array(strings, dtype=np.dtypes.StringDType)
+            strings = StringArray(strings)
             strings = strings.reshape(info.shape)
 
         return DeserializationResult(
@@ -240,7 +239,7 @@ class StringConverter(LVTypeConverter):
 
     @classmethod
     def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
-        val_array = np.asarray(value, dtype=StringDType)
+        val_array = StringArray(value)
 
         return SerializationResult(
             code=cls.supported_codes[0],
@@ -327,7 +326,7 @@ class ArrayConverter(LVTypeConverter):
             elif np.issubdtype(value.dtype, np.datetime64):
                 subt_converter = TimeStampConverter
 
-            elif isinstance(value.dtype, np.dtypes.StringDType):
+            elif StringArray.is_string_array(value):
                 subt_converter = StringConverter
 
             else:

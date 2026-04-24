@@ -24,6 +24,14 @@ from enum import IntEnum
 import numpy as np
 from numpy.typing import NDArray
 
+try:
+    # numpy >= 2.0
+    FLEX_STRING_DTYPE = np.dtypes.StringDType
+
+except AttributeError:
+    # numpy <2.0
+    FLEX_STRING_DTYPE = object
+
 
 class TypedItem:
     def __init__(self, item_type: Any = None):
@@ -176,6 +184,35 @@ class NamedArray(np.ndarray):
             return
         self.name = getattr(obj, 'name', "")
 
+
+class StringArray(NamedArray):
+    """
+    A specific NamedArray designed to hold variable-length LabVIEW strings.
+    Automatically forces the correct flexible string dtype.
+    """
+    string_dtype = FLEX_STRING_DTYPE
+
+    def __new__(cls, array, name: Optional[str] = "", **kwargs):
+        kwargs['dtype'] = cls.string_dtype
+        obj = super().__new__(cls, array, name=name, **kwargs)
+
+        return obj
+
+    def __array_finalize__(self, obj):
+        super().__array_finalize__(obj)
+
+    @classmethod
+    def is_string_array(cls, array: np.ndarray):
+        if isinstance(array, cls):
+            return True
+
+        if array.dtype == object or FLEX_STRING_DTYPE == object:
+            return all([isinstance(o, str) for o in array.flat])
+
+        if array.dtype == FLEX_STRING_DTYPE:
+            return True
+
+        return False
 
 class TypedList(list, TypedItem):
     pass
