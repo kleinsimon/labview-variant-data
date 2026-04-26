@@ -16,7 +16,7 @@ from typing import Tuple, Iterable, List, Optional, Type, Any, Dict, Collection,
 from numbers import Number
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone, timedelta
-from .types import Cluster, NamedItem
+from .types import Cluster, NamedItem, Variant, Signal, StringArray, NamedArray
 
 
 class LVDtypes:
@@ -1134,6 +1134,34 @@ class HeaderInfo:
         return replace(self, **kwargs)
 
 
+def check_same_type_and_dtype(lst: Iterable):
+    # Eine leere Liste betrachten wir als homogen (alle 0 Elemente sind vom selben Typ)
+    if not lst:
+        return True
+
+    # Typ und ggf. dtype des ersten Elements ermitteln
+    first_elem = lst[0]
+    first_type = type(first_elem)
+
+    # Prüfen, ob das erste Element ein 'dtype'-Attribut hat (z.B. numpy.ndarray)
+    has_dtype = hasattr(first_elem, 'dtype')
+    first_dtype = first_elem.dtype if has_dtype else None
+
+    # Alle weiteren Elemente durchgehen
+    for item in lst[1:]:
+        # 1. Ist der generelle Typ gleich?
+        if type(item) is not first_type:
+            return False
+
+        # 2. Wenn es ein Array ist, ist der dtype gleich?
+        if has_dtype:
+            # Sicherheitscheck, falls ein Element wider Erwarten kein dtype hat
+            if not hasattr(item, 'dtype') or item.dtype != first_dtype:
+                return False
+
+    return True
+
+
 class LVTypeConverter(ABC):
     """
     Abstract Interface of all type-convertes
@@ -1146,7 +1174,8 @@ class LVTypeConverter(ABC):
     serializers_list: List[Tuple[Type, Type["LVTypeConverter"]]] = []
     deserializers: Dict[int, Type["LVTypeConverter"]] = {}
 
-    default_array_converter: "LVTypeConverter" = None
+    default_array_converter: Type["LVTypeConverter"] = None
+    generic_converter: Type["LVTypeConverter"] = None
 
     @classmethod
     @abstractmethod
@@ -1189,7 +1218,7 @@ class LVTypeConverter(ABC):
 
         if isinstance(value, NamedItem):
             info.name = value.name
-            value = value.item
+            value = value.value
 
         res = cls._serialize(value, info)
 
@@ -1309,7 +1338,7 @@ class LVTypeConverter(ABC):
         """
 
         if isinstance(value, NamedItem):
-            value = value.item
+            value = value.value
 
         try:
             return cls.serializers[type(value)]
@@ -1360,4 +1389,16 @@ class LVTypeConverter(ABC):
 
         return cls.deserializers[code]
 
+    @classmethod
+    def get_converter_for_items(cls, items: Iterable) -> Type["LVTypeConverter"]:
+        if len(items) == 0:
+            conv = cls.generic_converter
 
+        else:
+            if check_same_type_and_dtype(items):
+                conv = LVTypeConverter.get_converter_for_value(items[0])
+
+            else:
+                conv = cls.generic_converter
+
+        return conv

@@ -24,7 +24,7 @@ from .utils import HeaderInfo, DeserializationData, SerializationData, Deseriali
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
                     date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance)
-from .types import Signal, TypedList, FLEX_STRING_DTYPE, StringArray, Cluster
+from .types import Signal, TypedList, FLEX_STRING_DTYPE, StringArray, Cluster, Variant
 
 
 class NumericConverter(LVTypeConverter):
@@ -428,7 +428,7 @@ LVTypeConverter.default_array_converter = ArrayConverter
 
 class ClusterConverter(LVTypeConverter):
     supported_codes = (0x50, )
-    supported_types = (Tuple, )
+    supported_types = (Tuple, Cluster)
 
     @classmethod
     def _serialize(cls, value: Tuple, info: SerializationData) -> SerializationResult:
@@ -867,7 +867,7 @@ class VariantVersionConverter18008(VariantVersionConverter):
 
 class VariantConverter(LVTypeConverter):
     supported_codes = (0x53, )
-    supported_types = ()
+    supported_types = (Variant, )
 
     @classmethod
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
@@ -892,35 +892,33 @@ class VariantConverter(LVTypeConverter):
         vheader = HeaderInfo(code=0x53, offset_h=offset, size=0, start=offset, name=name)
         return VariantConverter.deserialize(DeserializationData(header=vheader, buffer=buffer, offset_d=offset))
 
+    @classmethod
+    def serialize_array(cls, value, info: SerializationData, object_mode=True) -> SerializationResult:
+        return ArrayConverter.serialize_array(value, info, object_mode=object_mode)
+
+
+LVTypeConverter.generic_converter = VariantConverter
+
 
 class MapConverter(LVTypeConverter):
     supported_codes = (0x74, )
     supported_types = (dict, )
 
     @classmethod
+    def serialize_fields(cls, fields, info: SerializationData) -> List[SerializationResult]:
+        conv = LVTypeConverter.get_converter_for_items(fields)
+
+        return [conv.serialize(k, info) for k in fields]
+
+    @classmethod
     def _serialize(cls, value: dict, info: SerializationData) -> SerializationResult:
         try:
-            items = sorted([[k, v] for k, v in value.items()])
+            keys, vals = zip(*sorted(value.items()))
         except TypeError:
-            items = value.items()
+            keys, vals = zip(*value.items())
 
-        keys = [item[0] for item in items]
-        vals = [item[1] for item in items]
-
-        k_types = [type(k) for k in keys]
-        v_types = [type(v) for v in vals]
-
-        if not all([kt == k_types[0] for kt in k_types]) or not all([vt == v_types[0] for vt in v_types]):
-            k_conv = VariantConverter
-            v_conv = VariantConverter
-        else:
-            k_conv = LVTypeConverter.get_converter_for_value(keys[0])
-            v_conv = LVTypeConverter.get_converter_for_value(vals[0])
-
-        sub_info = info.fork()
-
-        k_res = [k_conv.serialize(k, sub_info) for k in keys]
-        v_res = [v_conv.serialize(v, sub_info) for v in vals]
+        k_res = cls.serialize_fields(keys, info.fork())
+        v_res = cls.serialize_fields(vals, info.fork())
 
         return SerializationResult(
             code=0x74,
@@ -972,14 +970,9 @@ class SetConverter(LVTypeConverter):
     @classmethod
     def _serialize(cls, value: set, info: SerializationData) -> SerializationResult:
         value = list(value)
-        item_types = {type(i) for i in value}
 
-        if len(item_types) == 1:
-            subt_converter = LVTypeConverter.get_converter_for_value(value[0])
-        else:
-            subt_converter = cls
-
-        sub_result = subt_converter.serialize(value, info.fork())
+        conv = LVTypeConverter.get_converter_for_items(value)
+        sub_result = conv.serialize_array(value, info.fork())
 
         if info.version == 0:
             header = b"\00\01"

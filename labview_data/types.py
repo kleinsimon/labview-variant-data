@@ -239,7 +239,7 @@ class NamedItem:
     :ivar item: The main item associated with the instance.
     :ivar name: An optional name or label for the item.
     """
-    item: Any
+    value: Any
     name: Optional[str] = None
 
 
@@ -381,3 +381,8 @@ class Signal(np.ndarray):
         :rtype: typing.Tuple[NDArray, NDArray]
         """
         return self.times, self.y
+
+
+@dataclasses.dataclass
+class Variant(NamedItem):
+    pass
