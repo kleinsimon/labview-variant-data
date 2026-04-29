@@ -224,7 +224,9 @@ class StringArray(NamedArray):
         return False
 
 class TypedList(list, TypedItem):
-    pass
+    def __init__(self, *args, item_type: Any = None):
+        list.__init__(self, *args)
+        TypedItem.__init__(self, item_type)
 
 
 @dataclasses.dataclass
