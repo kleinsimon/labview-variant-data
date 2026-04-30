@@ -244,6 +244,14 @@ class NamedItem:
     value: Any
     name: Optional[str] = None
 
+    def __hash__(self):
+        return hash((self.value, self.name))
+
+    def __eq__(self, other):
+        if isinstance(other, NamedItem):
+            return self.value == other.value and self.name == other.name
+        return False
+
 
 class ExtendedIntEnum(IntEnum):
     """
@@ -387,4 +395,16 @@ class Signal(np.ndarray):
 
 @dataclasses.dataclass
 class Variant(NamedItem):
+    pass
+
+    def __hash__(self):
+        return hash((self.value, self.name))
+
+    def __eq__(self, other):
+        if isinstance(other, Variant):
+            return self.value == other.value and self.name == other.name
+        return False
+
+
+if __name__ == "__main__":
     pass

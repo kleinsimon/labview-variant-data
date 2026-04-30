@@ -27,5 +27,5 @@ def deserialize_variant(buffer: bytes, return_struct=False):
 
 def serialize_variant(value, version=0x18008000) -> bytes:
     result = VariantConverter.serialize(value, SerializationData(version=version))
-    return result.buffer
+    return result.flat_buffer()
 

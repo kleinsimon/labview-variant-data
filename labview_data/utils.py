@@ -695,6 +695,7 @@ class SerializationResult:
     header_indices: Iterable[int] = None
     name: str = None
     shape: Collection[int] = None
+    buffer_suffix: bytes = b""
 
     @property
     def header_q(self):
@@ -733,7 +734,7 @@ class SerializationResult:
                 sub.all_sub_results(res)
         return res
 
-    def flat_header(self, include_sub_results=True, lut=None, force_empty_string=False) -> bytes:
+    def flat_header(self, include_sub_results=True, lut: "HeaderLUT"=None, force_empty_string=False) -> bytes:
         """
         Creates a flattened header in bytes format including optional sub-results and LUT transformation.
 
@@ -759,7 +760,7 @@ class SerializationResult:
             for res in results:
                 subh = res.flat_header(include_sub_results, lut, force_empty_string)
                 if lut:
-                    h += lut[subh]
+                    h += lut.substitute_header(subh)
                 else:
                     h += subh
 
@@ -769,7 +770,12 @@ class SerializationResult:
         elif force_empty_string:
             h += b"\00"
 
-        return num2bytes(len(h)+2) + h
+        res = num2bytes(len(h)+2, dtype=LVDtypes.u2) + h
+
+        if lut:
+            lut.add_header(res)
+
+        return res
 
     def flat_buffer(self) -> bytes:
         """
@@ -783,10 +789,12 @@ class SerializationResult:
                  sub-results.
         :rtype: bytes
         """
-        b = self.buffer
+        #b = self.buffer
+        b = b""
         if self.sub_results:
-            b += b"".join([res.flat_buffer() for res in self.sub_results])
-        return b
+            b = b.join([res.flat_buffer() for res in self.sub_results])
+        #b += self.buffer_suffix
+        return self.buffer + b + self.buffer_suffix
 
     def replace(self, **kwargs) -> "SerializationResult":
         """
@@ -803,6 +811,9 @@ class SerializationResult:
             properties.
         :rtype: SerializationResult
         """
+        if "buffer" in kwargs:
+            kwargs["buffer_suffix"] = b""
+
         return replace(self, **kwargs)
 
 
@@ -1136,7 +1147,7 @@ class HeaderInfo:
 
 def check_same_type_and_dtype(lst: Iterable):
     # Eine leere Liste betrachten wir als homogen (alle 0 Elemente sind vom selben Typ)
-    if not lst:
+    if lst is None or len(lst) == 0:
         return True
 
     # Typ und ggf. dtype des ersten Elements ermitteln
@@ -1337,11 +1348,12 @@ class LVTypeConverter(ABC):
         :raises ValueError: If no suitable converter is found for the type of the value.
         """
 
-        if isinstance(value, NamedItem):
+        if isinstance(value, NamedItem) and not isinstance(value, Variant):
             value = value.value
 
         try:
-            return cls.serializers[type(value)]
+            t = type(value)
+            return cls.serializers[t]
 
         except KeyError:
             pass
@@ -1402,3 +1414,20 @@ class LVTypeConverter(ABC):
                 conv = cls.generic_converter
 
         return conv
+
+
+class HeaderLUT:
+    def __init__(self):
+        self.headers_lut = {}
+        self.headers = []
+
+    def add_header(self, header: bytes):
+        if header not in self.headers_lut:
+            self.headers.append(header)
+            self.headers_lut[header] = num2bytes(len(self.headers) - 1, dtype=LVDtypes.u2)
+
+    def substitute_header(self, header: bytes) -> bytes:
+        if header not in self.headers_lut:
+            self.add_header(header)
+        return self.headers_lut[header]
+

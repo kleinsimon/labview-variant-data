@@ -23,7 +23,7 @@ import numpy as np
 from .utils import HeaderInfo, DeserializationData, SerializationData, DeserializationResult, SerializationResult
 from .utils import MapDeserializationResult, ArrayDeserializationResult, ClusterDeserializationResult
 from .utils import (bytes2num, bytes2str, num2bytes, LVDtypes, LVTypeConverter, SetDeserializationResult, str2bytes,
-                    date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance)
+                    date2bytesNP, bytes2dateNP, date2bytes, lv_parse, lv_dump, all_of_instance, HeaderLUT)
 from .types import Signal, TypedList, FLEX_STRING_DTYPE, StringArray, Cluster, Variant
 
 
@@ -385,12 +385,12 @@ class ArrayConverter(LVTypeConverter):
 
     @classmethod
     def serialize_array(cls, value, info: SerializationData, object_mode=False) -> SerializationResult:
-        o_array = np.array(value, dtype=object)
+        o_array = np.empty(len(value), dtype=object)
+        o_array[:] = value
         shape = o_array.shape
-        o_array = o_array.flatten()
 
         if not object_mode:
-            converter = LVTypeConverter.get_converter_for_value(o_array[0])
+            converter = LVTypeConverter.get_converter_for_items(o_array)
         else:
             converter = VariantConverter
 
@@ -719,7 +719,11 @@ class VariantVersionConverter:
                     v_converter = converter
             else:
                 v_converter = cls.converters[max(cls.converters.keys())]
-        return v_converter._deserialize(info)
+        res = v_converter._deserialize(info)
+
+        if VariantConverter.wrap_variants and res.scalar is not None:
+            res.scalar = Variant(res.scalar, res.name)
+        return res
 
     @classmethod
     @abc.abstractmethod
@@ -828,36 +832,46 @@ class VariantVersionConverter18008(VariantVersionConverter):
 
     @classmethod
     def _wrap_variant(cls, res: SerializationResult, info: SerializationData) -> SerializationResult:
-        sub_results = res.all_sub_results()
-        sub_results.sort(key=lambda r: r.depth, reverse=True)
-        depths: Dict[int, List[SerializationResult]] = {}
-        for result in sub_results:
-            if result.depth not in depths:
-                depths[result.depth] = []
-            depths[result.depth].append(result)
 
-        headers_lut = {}
-        headers = []
+        if res.depth >= 0:
+            sub_results = res.all_sub_results()
+            sub_results.sort(key=lambda r: r.depth, reverse=True)
+            depths: Dict[int, List[SerializationResult]] = {}
+            for result in sub_results:
+                if result.depth not in depths:
+                    depths[result.depth] = []
+                depths[result.depth].append(result)
 
-        for depth, results in depths.items():
-            for result in results:
-                subh = result.flat_header(lut=headers_lut, force_empty_string=False)
-                if subh not in headers_lut:
-                    headers.append(subh)
-                    headers_lut[subh] = num2bytes(len(headers) - 1, dtype=LVDtypes.u2)
+            headers_lut = HeaderLUT()
 
-        tl_result = headers_lut[res.flat_header(lut=headers_lut, force_empty_string=False)]
+            for depth, results in depths.items():
+                for result in results:
+                    result.flat_header(lut=headers_lut, force_empty_string=False)
 
-        result = SerializationResult(
-            code=0x53,
-            header=b"",
-            buffer=b"\x18\00\x80\00" + num2bytes(len(headers), LVDtypes.u4) + b"".join(headers)
-                   + b"\x00\x01"  # Number of values, always 1
-                   + tl_result
-                   + res.flat_buffer()
-                   + b"\00\00\00\00",  # Number of attributes... not supported
-            depth=info.depth
-        )
+            tl_result = headers_lut.substitute_header(res.flat_header(lut=headers_lut, force_empty_string=False))
+
+            headers = headers_lut.headers
+
+            result = SerializationResult(
+                code=0x53,
+                header=b"",
+                buffer=b"\x18\00\x80\00" + num2bytes(len(headers), LVDtypes.u4) + b"".join(headers)
+                       + b"\x00\x01"  # Number of values, always 1
+                       + tl_result
+                       + res.flat_buffer(),
+                buffer_suffix = b"\00\00\00\00",  # Number of attributes... not supported
+                depth=info.depth
+            )
+        else:
+            result = SerializationResult(
+                code=0x53,
+                header=b"",
+                buffer=b"\x18\x00\x80\x00\xff\xff\xff\xff",
+                buffer_suffix = b"\00\00\00\00",
+                depth=info.depth,
+                sub_results=(res,),
+                header_indices=(0,)
+            )
 
         return result
 
@@ -868,6 +882,7 @@ class VariantVersionConverter18008(VariantVersionConverter):
 class VariantConverter(LVTypeConverter):
     supported_codes = (0x53, )
     supported_types = (Variant, )
+    wrap_variants = False
 
     @classmethod
     def _deserialize(cls, info: DeserializationData) -> DeserializationResult:
@@ -878,6 +893,8 @@ class VariantConverter(LVTypeConverter):
 
     @classmethod
     def _serialize(cls, value: Dict, info: SerializationData) -> SerializationResult:
+        if isinstance(value, Variant):
+            value = value.value
         return VariantVersionConverter.serialize(value, info)
 
     @staticmethod
@@ -906,9 +923,13 @@ class MapConverter(LVTypeConverter):
 
     @classmethod
     def serialize_fields(cls, fields, info: SerializationData) -> List[SerializationResult]:
-        conv = LVTypeConverter.get_converter_for_items(fields)
+        if fields is None:
+            return [VariantConverter.serialize(None, info)]
 
-        return [conv.serialize(k, info) for k in fields]
+        conv = LVTypeConverter.get_converter_for_items(fields)
+        results = [conv.serialize(k, info) for k in fields]
+
+        return results
 
     @classmethod
     def _serialize(cls, value: dict, info: SerializationData) -> SerializationResult:
@@ -916,6 +937,9 @@ class MapConverter(LVTypeConverter):
             keys, vals = zip(*sorted(value.items()))
         except TypeError:
             keys, vals = zip(*value.items())
+        except ValueError:
+            # empty map
+            keys, vals = None, None
 
         k_res = cls.serialize_fields(keys, info.fork())
         v_res = cls.serialize_fields(vals, info.fork())
